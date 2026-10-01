@@ -1,0 +1,13 @@
+﻿<Project>
+
+  <!-- lite 版工程级编译约定：与主版本保持一致（可整体拷贝本文件夹独立编译）。 -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AnalysisLevel>none</AnalysisLevel>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+    <NeutralLanguage>zh-CN</NeutralLanguage>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,19 @@
+# Build output
+bin/
+obj/
+.packages/
+
+# Published / deployment copies (may contain real credentials - never commit)
+release/
+release-*/
+_private/
+
+# Runtime data (logs), scratch output and backups
+data/
+_shots/
+*.log
+*.bak
+
+# Build byproducts
+selfcheck.out.txt
+selfcheck.err.txt

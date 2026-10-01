@@ -1,0 +1,26 @@
+# 全仓库统一换行：工作区用 CRLF（Windows / .NET Framework 项目），
+# 避免不同机器提交时产生整文件 diff。
+* text=auto eol=crlf
+
+# 明确指定文本文件（含 BOM 的 XML/工程文件也照常归一化，BOM 不受影响）
+*.cs        text eol=crlf
+*.csproj    text eol=crlf
+*.props     text eol=crlf
+*.sln       text eol=crlf
+*.config    text eol=crlf
+*.manifest  text eol=crlf
+*.ps1       text eol=crlf
+*.md        text eol=crlf
+*.json      text eol=crlf
+*.txt       text eol=crlf
+.editorconfig text eol=crlf
+.gitignore    text eol=crlf
+.gitattributes text eol=crlf
+
+# 二进制：绝不参与换行/文本处理
+*.ico   binary
+*.png   binary
+*.exe   binary
+*.dll   binary
+*.pdb   binary
+*.zip   binary

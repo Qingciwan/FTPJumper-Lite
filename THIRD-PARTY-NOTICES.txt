@@ -1,0 +1,42 @@
+第三方组件声明（FtpJumper Lite / liteEdition）
+================================================================================
+
+1) Newtonsoft.Json 13.0.3
+   用途    ：读写 subjects.json
+   分发形式：随程序附带 Newtonsoft.Json.dll
+   许可    ：MIT
+   版权    ：Copyright (c) 2007 James Newton-King
+
+   The MIT License (MIT)
+
+   Copyright (c) 2007 James Newton-King
+
+   Permission is hereby granted, free of charge, to any person obtaining a copy of
+   this software and associated documentation files (the "Software"), to deal in
+   the Software without restriction, including without limitation the rights to
+   use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+   the Software, and to permit persons to whom the Software is furnished to do so,
+   subject to the following conditions:
+
+   The above copyright notice and this permission notice shall be included in all
+   copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+   FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+   COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+   IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+   CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+2) Microsoft.NETFramework.ReferenceAssemblies 1.0.3
+   用途    ：仅编译期提供 .NET Framework 4.8 引用程序集
+   分发形式：**不随程序分发**（csproj 中 PrivateAssets=all，仅构建时使用）
+   许可    ：MIT
+
+--------------------------------------------------------------------------------
+
+3) .NET Framework 4.8 运行时
+   由操作系统提供（Windows 10/11 自带），本程序不重新分发任何运行时文件。
+   运行要求：Windows 10/11，已启用 .NET Framework 4.8（系统组件）。

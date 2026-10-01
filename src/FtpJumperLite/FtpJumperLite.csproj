@@ -1,0 +1,31 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>FtpJumperLite</RootNamespace>
+    <AssemblyName>FtpJumperLite</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- 仓库自带一份图标（32bpp，16/24/32/48/64/72/96/128/256 九个尺寸），保证本文件夹可独立编译。 -->
+    <ApplicationIcon>..\..\Report1.ico</ApplicationIcon>
+    <AssemblyTitle>FtpJumper Lite 课堂资料助手</AssemblyTitle>
+    <Product>FtpJumper Lite</Product>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\subjects.json" Link="subjects.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

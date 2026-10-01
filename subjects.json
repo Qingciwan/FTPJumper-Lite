@@ -1,0 +1,28 @@
+{
+  "_comment": "FtpJumper Lite 配置文件：账号密码按需求明文存储，程序会把每个科目拼成 ftp:// 网址直接交给 Windows 文件资源管理器打开（不再下载）。添加科目 = 整段复制一个 subjects 条目并修改；删除科目 = 删掉对应条目；保存后回到程序点「刷新配置」。",
+  "version": 2,
+  "subjects": [
+    {
+      "id": "yuwen-2026",
+      "name": "语文",
+      "host": "ftp.example.com",
+      "port": 21,
+      "user": "你的用户名",
+      "password": "你的密码",
+      "remotePath": "/pub/yuwen",
+      "credentialMode": "inline",
+      "lastSyncAt": ""
+    },
+    {
+      "id": "meishu-2026",
+      "name": "美术",
+      "host": "ftp.example.com",
+      "port": 21,
+      "user": "你的用户名",
+      "password": "你的密码",
+      "remotePath": "/",
+      "credentialMode": "inline",
+      "lastSyncAt": ""
+    }
+  ]
+}
