@@ -64,8 +64,7 @@
 3. 两者都失败时，弹窗给出可手动粘贴的**脱敏**网址（明文需要自己看配置）。
 
 > 为什么写死 explorer：ftp 是 URL 协议关联
-> （`HKCU\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\ftp`），教室里常被第三方浏览器抢走。
-> 本机实测该关联是 `Progid = 360ChromeURL`（`HKLM\SOFTWARE\Classes\ftp\shell\open\command` 指向 360 浏览器），
+> （`HKCU\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\ftp`），常被第三方浏览器抢走。
 > 而 `explorer.exe "ftp://user:pass@host:port/path/"` 能稳定打开资源管理器并列出远端目录，
 > 因此不再依赖系统关联，也就不必在每台一体机上改默认应用。
 
@@ -110,7 +109,7 @@
    不设列样式时列会按内容 AutoSize，被按钮文字撑得比窗口还宽 → 整行向右溢出、左右留白不对称（就是“不居中”）。
    同时每行文字按**像素宽度**截断（超出加省略号），保证文本既不换行也不超宽。
 
-### 实测环境与结论（本机）
+### 实测环境与结论
 
 | 项 | 值 |
 |---|---|
@@ -263,8 +262,6 @@ FtpJumperLite.exe --url [科目id或名称] [--show-password] [--open] [--cfg �
 ## 6. 许可与合规
 
 - 本作品采用 **CC BY-NC-SA 4.0**（署名—非商业性使用—相同方式共享）许可，详见 `LICENSE.txt`。
-- 入库前请确认：仓库中不得包含真实 FTP 凭据（`release\`、`_private\`、`bin\`、`obj\`、`.packages\` 已在 `.gitignore` 中排除）。
-  **发布前请先在 `LICENSE.txt` 里补全署名与来源地址**（CC BY 要求署名 + 许可链接 + 是否修改）。
 - 随程序分发的第三方组件与许可：见 `THIRD-PARTY-NOTICES.txt`（当前只有 `Newtonsoft.Json`，MIT）。
 - 程序**不分发** .NET Framework 运行时；要求系统已启用 .NET Framework 4.8。
 - 凭据：所有账号密码以**明文**存放在 `subjects.json`，这是需求本身的要求。发布/外发前请把 `subjects.json`
