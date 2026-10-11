@@ -291,6 +291,16 @@ namespace FtpJumperLite.Tests
                                             "留白不对称 count={0} {1}x{2}: 左={3} 右={4} 行宽={5} 表宽={6} padding={7} 滚动={8}",
                                             count, w, h, left, right, rows[0].Width, table.ClientSize.Width, table.Padding, table.VerticalScroll.Visible));
                                     }
+
+                                    // 内容明明放得下却冒出纵向滚动条 —— 这正是目标机上"首行被切"的现场特征。
+                                    var rowSpace = rows.Sum(r => r.Height + r.Margin.Vertical);
+                                    if (table.VerticalScroll.Visible
+                                        && table.Padding.Vertical + rowSpace <= table.ClientSize.Height)
+                                    {
+                                        problems.Add(string.Format(
+                                            "内容放得下却出现纵向滚动条 count={0} {1}x{2}: 行合计={3} 表client={4} 行高=[{5}]",
+                                            count, w, h, rowSpace, table.ClientSize, string.Join(",", hs)));
+                                    }
                                 }
                             }
                             catch (Exception ex)
@@ -308,6 +318,167 @@ namespace FtpJumperLite.Tests
             Assert.True(
                 problems.Count == 0,
                 "共 " + problems.Count + " 处违规：\r\n" + string.Join("\r\n", problems.Take(40)));
+        }
+
+        /// <summary>
+        /// 窗口落位（纯函数）：目标机现场是 200% 下默认窗口 1428x1984 落在屏幕左上角、
+        /// 下沿压住任务栏；这里把"工作区内居中 + 绝不越界"钉死。
+        /// </summary>
+        [Fact]
+        public void ComputeCenteredLocation_CentersAndStaysInsideWorkArea()
+        {
+            var work = new Rectangle(0, 0, 3840, 2064);   // 4K@200% 的工作区（任务栏 96px）
+            var size = new Size(1428, 1984);
+            var p = MainForm.ComputeCenteredLocation(size, work);
+
+            Assert.Equal(new Point(1206, 40), p);
+            Assert.True(work.Contains(new Rectangle(p, size)), "窗口应完整落在工作区内：" + p);
+
+            // 比工作区还大：贴左上角，绝不出现负坐标（负坐标会跑到屏幕外或压住任务栏）。
+            Assert.Equal(new Point(0, 0), MainForm.ComputeCenteredLocation(new Size(4000, 3000), work));
+
+            // 工作区不在原点（多屏）时也要夹在它里面。
+            var second = new Rectangle(1920, 0, 1920, 1040);
+            var q = MainForm.ComputeCenteredLocation(new Size(1428, 1000), second);
+            Assert.True(
+                second.Contains(new Rectangle(q, new Size(1428, 1000))),
+                "多屏情况下也应完整落在该屏工作区内：" + q);
+            Assert.True(q.X >= second.Left, "不应跑到左边那块屏幕上：" + q);
+
+            // 比工作区更高（小屏/任务栏很高）：贴顶部，不能出现负 y。
+            Assert.Equal(second.Top, MainForm.ComputeCenteredLocation(new Size(1428, 1984), second).Y);
+        }
+
+        /// <summary>
+        /// 目标机缺陷回归：内容放得下时**不允许**出现纵向滚动条，且第一行必须完整可见。
+        /// 现场表现是"表格比可视区高 31px → 出滚动条 → 首行被 AutoScroll 滚出去、顶部被切"。
+        /// </summary>
+        [Fact]
+        public void RowsFit_ThenNoScrollbarAndFirstRowIsNotClipped()
+        {
+            var configPath = Path.Combine(_dir, "fit.json");
+            File.WriteAllText(configPath, BuildConfigJson(10));
+
+            var sawFitCase = false;
+            foreach (var size in new[] { new Size(740, 1000), new Size(697, 680), new Size(660, 620) })
+            {
+                Exception? failure = null;
+                var fit = false;
+                var thread = new Thread(() =>
+                {
+                    MakeThreadDpiAware();
+                    try
+                    {
+                        fit = AssertNoScrollbarAndFirstRowIntact(configPath, size);
+                    }
+                    catch (Exception ex)
+                    {
+                        failure = ex;
+                    }
+                });
+                thread.SetApartmentState(ApartmentState.STA);
+                thread.Start();
+                thread.Join();
+
+                Assert.True(failure == null, "窗口 " + size + " 下布局校验失败：" + failure);
+                sawFitCase |= fit;
+            }
+
+            Assert.True(sawFitCase, "至少要有一个尺寸能放下 10 行，否则这条测试没验到“放得下就不该有滚动条”。");
+        }
+
+        /// <summary>
+        /// 校验一个尺寸下的三点不变式：
+        /// 1) 首行完整可见、且没有滚动偏移（被 AutoScroll 滚出去时首行的 Top 会小于"内边距+行内间距"）；
+        /// 2) 内容放得下时**绝不**出现滚动条 —— 这正是目标机现场"表格比可视区高 31px → 出滚动条 → 首行被切"的对照；
+        /// 3) 内容确实装不下时（科目多/窗口矮）必须允许纵向滚动。
+        /// 返回值表示该尺寸下内容是否放得下。
+        /// </summary>
+        private static bool AssertNoScrollbarAndFirstRowIntact(string configPath, Size size)
+        {
+            using (var form = new MainForm(configPath))
+            {
+                form.Size = size;
+                form.CreateControl();
+                form.PerformLayout();
+
+                var table = GetPrivateField<TableLayoutPanel>(form, "_subjectTable");
+                var rows = table.Controls.Cast<Control>().ToList();
+                var rowSpace = rows.Sum(r => r.Height + r.Margin.Vertical);
+                var available = table.ClientSize.Height - table.Padding.Vertical;
+                var fits = rowSpace <= available;
+                var info = "行合计=" + rowSpace + " 可用=" + available + " 表client=" + table.ClientSize
+                           + " 行高=[" + string.Join(",", rows.Select(r => r.Height)) + "]";
+
+                // 与是否溢出无关：首行上沿 = 表格内边距 + 行内上间距，底部不越界，且滚动位置为 0。
+                Assert.Equal(table.Padding.Top + rows[0].Margin.Top, rows[0].Top);
+                Assert.True(rows[0].Bottom <= table.ClientSize.Height, "首行底部越界：" + info);
+                Assert.Equal(0, table.AutoScrollPosition.X);
+                Assert.Equal(0, table.AutoScrollPosition.Y);
+
+                if (fits)
+                {
+                    Assert.False(table.VerticalScroll.Visible, "内容放得下时不该出现纵向滚动条：" + info);
+                    Assert.False(table.HorizontalScroll.Visible, "不该出现横向滚动条：" + info);
+                }
+                else
+                {
+                    Assert.True(table.AutoScroll, "内容装不下时应允许纵向滚动：" + info);
+                }
+
+                return fits;
+            }
+        }
+
+        /// <summary>
+        /// 显示时的兜底：即便确实存在滚动范围（科目多、窗口矮），首次显示后也必须回到顶部，
+        /// 否则"第一个科目按钮拿到焦点 → AutoScroll 把它滚进视野"会把首行切掉。
+        /// </summary>
+        [Fact]
+        public void ResetSubjectScroll_BringsPanelBackToTop()
+        {
+            var configPath = Path.Combine(_dir, "many.json");
+            File.WriteAllText(configPath, BuildLongConfigJson(15));
+
+            Exception? failure = null;
+            var thread = new Thread(() =>
+            {
+                MakeThreadDpiAware();
+                try
+                {
+                    using (var form = new MainForm(configPath))
+                    {
+                        form.Size = new Size(660, 620);
+                        form.CreateControl();
+                        form.PerformLayout();
+
+                        var table = GetPrivateField<TableLayoutPanel>(form, "_subjectTable");
+                        Assert.True(table.VerticalScroll.Visible, "15 个科目在矮窗口下应当可以滚动。");
+
+                        // 真正滚动需要窗口句柄（未显示时 AutoScrollPosition 只是缓存标志，设了也不动）。
+                        form.Show();
+                        Application.DoEvents();
+
+                        table.AutoScrollPosition = new Point(0, 30);
+                        Assert.NotEqual(0, table.AutoScrollPosition.Y);
+
+                        InvokePrivate(form, "ResetSubjectScroll");
+
+                        Assert.Equal(0, table.AutoScrollPosition.Y);
+                        Assert.Equal(0, table.AutoScrollPosition.X);
+                        form.Hide();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            thread.Join();
+
+            Assert.True(failure == null, "滚动位置复位失败：" + failure);
         }
 
         /// <summary>科目名与远端路径都用“较长文本”，模拟真实配置（如 ftp.example.com · /pub/yuwen）。</summary>
@@ -402,9 +573,13 @@ namespace FtpJumperLite.Tests
                 }
                 else
                 {
+                    // 行高不再"填到 0 余量"：整列预留 RowSafetyLogical 个逻辑像素（200% 下为 4px），
+                    // 免得后续任何一次 1~2px 的收缩把内容顶得比可视区高 —— 那就会冒出滚动条并切掉首行。
+                    var reserve = MainForm.ScaleFor(MainForm.RowSafetyLogical, form.DpiScale);
                     Assert.True(
-                        available - rowSpace <= 2,
-                        "科目行未精确填满：行占用高度合计 " + rowSpace + "，可用高度 " + available);
+                        available - rowSpace <= reserve + 1,
+                        "科目行未按预期填满：行占用高度合计 " + rowSpace + "，可用高度 " + available
+                        + "，安全余量 " + reserve);
                 }
 
                 foreach (var row in table.Controls.Cast<Control>())
@@ -553,6 +728,13 @@ namespace FtpJumperLite.Tests
             }
 
             return null;
+        }
+
+        private static void InvokePrivate(object instance, string methodName)
+        {
+            var method = instance.GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(method);
+            method!.Invoke(instance, null);
         }
 
         private static T GetPrivateField<T>(object instance, string fieldName)

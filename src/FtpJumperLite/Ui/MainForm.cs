@@ -58,6 +58,16 @@ namespace FtpJumperLite.Ui
         /// </summary>
         private const int TextSafetyLogical = 8;
 
+        /// <summary>
+        /// 行高安全余量（逻辑像素）：宁可让整列少占两像素，也不让行高"刚好等于"可用高度。
+        /// 余量一旦为 0，后续任何一次 1~2px 的收缩（滚动条显隐、状态栏自适应高度、拖动窗口边缘）
+        /// 都会立刻挤出纵向滚动条，并把第一行顶出可视区 —— 现场那根 31px 滚动条就是这么来的。
+        /// </summary>
+        public const int RowSafetyLogical = 2;
+
+        /// <summary>行高重算的最大轮数：自身改动会再次触发布局，需要收敛，但不能死循环。</summary>
+        private const int MaxRowLayoutPasses = 4;
+
         private readonly string _configPath;
         private readonly ConfigStore _configStore;
         private readonly TableLayoutPanel _root;
@@ -75,6 +85,8 @@ namespace FtpJumperLite.Ui
         /// <summary>构造函数是否已跑完；在此之前任何字段都可能还是 null，禁止按 DPI 缩放。</summary>
         private bool _layoutReady;
         private bool _inRowLayout;
+        /// <summary>本轮回算期间又有新的布局请求进来（说明表格尺寸变了），需要再算一遍。</summary>
+        private bool _rowLayoutDirty;
 
         public MainForm(string? configPath)
         {
@@ -134,6 +146,8 @@ namespace FtpJumperLite.Ui
             _subjectTable.HorizontalScroll.Enabled = false;
             _subjectTable.Resize += (_, _) => ApplyRowLayout();
             _subjectTable.Layout += (_, _) => ApplyRowLayout();
+            // 滚动条显隐只改客户区尺寸、不一定触发 Resize：漏掉它就会"行高按旧高度算、永远不再重算"。
+            _subjectTable.ClientSizeChanged += (_, _) => ApplyRowLayout();
             _root.Controls.Add(_subjectTable, 0, 0);
 
             _btnRefresh = MakeBottomButton("刷新配置", (_, _) => ReloadSubjects());
@@ -276,6 +290,69 @@ namespace FtpJumperLite.Ui
             base.OnLoad(e);
             // 构造完成后再校正一次：句柄可能在构造期间就创建了（那时字段还没赋值，不能缩放）。
             TryApplyDpiScaling();
+
+            // 尺寸/DPI 都定下来之后自己摆位置。不能只靠 StartPosition=CenterScreen：
+            // 构造函数里 RealDpi() 会通过 CreateGraphics() 提前创建句柄，StartPosition 在那一刻就按
+            // "还没有尺寸的窗体"生效（或被系统默认级联位置顶掉），于是 200% 机器上窗口落在屏幕左上角、
+            // 下沿压住任务栏。这里显式居中并夹进工作区，位置只由最终尺寸决定。
+            CenterOnPrimaryWorkArea();
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+
+            // 窗口首次显示时，第一个科目按钮会拿到焦点，WinForms 的 AutoScroll 会把它"滚进视野"，
+            // 面板被滚到最大值 → 第一行顶部被切掉。这里统一把滚动位置复位到左上角。
+            ResetSubjectScroll();
+
+            // 现场排障用：把最终落位与滚动状态写进日志（目标机上一条即可判定）。
+            AppLogger.Info("窗口已显示：Bounds=" + Bounds
+                           + " 科目区=" + _subjectTable.ClientSize
+                           + " 滚动条=" + _subjectTable.VerticalScroll.Visible
+                           + " 滚动偏移=" + _subjectTable.AutoScrollPosition);
+        }
+
+        /// <summary>把窗口在<b>主屏工作区</b>内居中摆放，并保证整个窗口不越出工作区（含任务栏区域）。</summary>
+        private void CenterOnPrimaryWorkArea()
+        {
+            var work = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 800);
+            var target = ComputeCenteredLocation(Size, work);
+
+            // 交给系统兜底不如自己算：设为 Manual 后不会再被 StartPosition / 系统默认位置改写。
+            StartPosition = FormStartPosition.Manual;
+            Location = target;
+
+            AppLogger.Info("窗口定位：工作区=" + work + " 窗口=" + Size + " → 位置=" + Location);
+        }
+
+        /// <summary>
+        /// 居中位置（纯函数，便于测试）：窗口比工作区小就居中，比工作区大就贴工作区左上角，
+        /// 结果永远保证窗口完整落在工作区内。
+        /// </summary>
+        public static Point ComputeCenteredLocation(Size windowSize, Rectangle workArea)
+        {
+            var x = workArea.Left + ((workArea.Width - windowSize.Width) / 2);
+            var y = workArea.Top + ((workArea.Height - windowSize.Height) / 2);
+
+            x = windowSize.Width >= workArea.Width
+                ? workArea.Left
+                : Math.Max(workArea.Left, Math.Min(x, workArea.Right - windowSize.Width));
+            y = windowSize.Height >= workArea.Height
+                ? workArea.Top
+                : Math.Max(workArea.Top, Math.Min(y, workArea.Bottom - windowSize.Height));
+
+            return new Point(x, y);
+        }
+
+        /// <summary>把科目区滚动位置复位到左上角（内容放得下时它本来就该是 0）。</summary>
+        private void ResetSubjectScroll()
+        {
+            var current = _subjectTable.AutoScrollPosition;
+            if (current.X != 0 || current.Y != 0)
+            {
+                _subjectTable.AutoScrollPosition = new Point(0, 0);
+            }
         }
 
         protected override void OnDpiChangedAfterParent(EventArgs e)
@@ -382,6 +459,7 @@ namespace FtpJumperLite.Ui
             _subjectTable.RowStyles.Clear();
             _subjectRows.Clear();
             _spacerRowStyle = null;
+            _rowLayoutDirty = false;
 
             if (_subjects.Count == 0)
             {
@@ -634,6 +712,11 @@ namespace FtpJumperLite.Ui
         {
             if (_inRowLayout)
             {
+                // 关键：改动行高/字号/AutoScrollMinSize 会再次触发布局，而那次布局里表格客户区可能已经变了
+                // （例如滚动条刚出现）。早先这里直接 return，把这些请求丢掉了，于是"表格尺寸已变、行高还是旧的"
+                // 就一直卡着不收敛 —— 现场那根 31px 滚动条与首行被切，就是这么留下来的。
+                // 现在只记下"还需要再算一遍"，由外层循环收敛。
+                _rowLayoutDirty = true;
                 return;
             }
 
@@ -650,7 +733,18 @@ namespace FtpJumperLite.Ui
             _inRowLayout = true;
             try
             {
-                ApplyRowLayoutCore();
+                // 迭代到稳定：算一遍 → 触发布局 → 若表格客户区又变了就再算一遍（最多几轮，避免死循环）。
+                for (var pass = 0; pass < MaxRowLayoutPasses; pass++)
+                {
+                    _rowLayoutDirty = false;
+                    ApplyRowLayoutCore();
+                    if (!_rowLayoutDirty)
+                    {
+                        return;
+                    }
+                }
+
+                AppLogger.Warn("行高布局在 " + MaxRowLayoutPasses + " 轮后仍未稳定，已停止重算以免死循环。");
             }
             finally
             {
@@ -663,20 +757,29 @@ namespace FtpJumperLite.Ui
             var margin = Scale(RowMarginLogical);
             var available = _subjectTable.ClientSize.Height - _subjectTable.Padding.Vertical;
             var max = Scale(MaxRowHeightLogical);
-            var target = ComputeRowHeightPx(available, _subjects.Count, _dpiScale, ComputeContentFloorPx());
 
-            // 一屏放得下时，把剩余空间尽量分给各行（不超过上限），让列表填满窗口而不是在下面留一条空隙。
-            var remainder = 0;
-            if (available > 0 && _subjects.Count <= MaxVisibleRows)
+            // 先扣掉安全余量再分行：行高"刚好等于"可用高度时，任何一次 1~2px 的收缩都会挤出滚动条。
+            var usable = available - Scale(RowSafetyLogical);
+            if (usable <= 0)
             {
-                var share = available / _subjects.Count;
+                usable = available;
+            }
+
+            var target = ComputeRowHeightPx(usable, _subjects.Count, _dpiScale, ComputeContentFloorPx());
+
+            // 一屏放得下时，把剩余空间尽量分给各行（不超过上限），让列表填满窗口而不是在下面留一条空隙；
+            // 但填的是"扣掉安全余量之后"的空间，所以永远留下 RowSafetyLogical 个逻辑像素的余量。
+            var remainder = 0;
+            if (usable > 0 && _subjects.Count <= MaxVisibleRows)
+            {
+                var share = usable / _subjects.Count;
                 if (share > target)
                 {
                     target = Math.Min(max, share);
                 }
 
                 // 行高就是该行占用的总高度（按钮的上下 Margin 在行内扣减），所以这里不带 margin。
-                var left = available - (_subjects.Count * target);
+                var left = usable - (_subjects.Count * target);
                 if (left > 0 && left < _subjects.Count)
                 {
                     remainder = left; // 余数逐行 +1px，做到像素级填满
