@@ -6,9 +6,9 @@ Usage:
 
 Compliance notes:
   * The payload always gets LICENSE.txt and THIRD-PARTY-NOTICES.txt.
-  * By default the payload gets the PLACEHOLDER subjects.json (from .\subjects.json).
-    If the target folder already holds a real teacher config, that file is first backed up to
-    .\_private\ (outside the payload) and then replaced by the placeholder, so a
+  * By default the payload gets the PLACEHOLDER subjects.json and settings.json (from the repo root).
+    If the target folder already holds real teacher files, they are first backed up to
+    .\_private\ (outside the payload) and then replaced by the placeholders, so a
     published folder never ships real FTP credentials by accident.
   * Pass -IncludeTeacherConfig to keep the real config in the payload (classroom deployment copy).
   * Extra files left in the target folder (old zips, logs, *.bak) are reported, never deleted.
@@ -72,8 +72,33 @@ function Publish-To([string]$dest) {
         Write-Host 'Published placeholder subjects.json (no real credentials).'
     }
 
+    # settings.json: same policy as subjects.json (theme / font scale / palette, may contain nothing sensitive,
+    # but keep the teacher's own preferences out of a distributable payload by default).
+    $templateSettings = Join-Path $root 'settings.json'
+    $destSettings = Join-Path $dest 'settings.json'
+    if (-not (Test-Path $templateSettings)) { throw "Required file missing: $templateSettings" }
+
+    if ($IncludeTeacherConfig) {
+        if (-not (Test-Path $destSettings)) {
+            Copy-Item $templateSettings $destSettings -Force
+            Write-Host 'Seeded settings.json from the placeholder template.'
+        }
+    }
+    else {
+        if (Test-Path $destSettings) {
+            $privateDir = Join-Path $root '_private'
+            New-Item -ItemType Directory -Force -Path $privateDir | Out-Null
+            $settingsBackup = Join-Path $privateDir ('settings.teacher-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.json')
+            Copy-Item $destSettings $settingsBackup -Force
+            Write-Host "Existing settings.json moved out of the payload, backup: $settingsBackup"
+        }
+
+        Copy-Item $templateSettings $destSettings -Force
+        Write-Host 'Published placeholder settings.json (theme=system, fontScale=100).'
+    }
+
     # Report anything else sitting in the payload folder instead of deleting it.
-    $allowed = @($payload + $docs + @('subjects.json'))
+    $allowed = @($payload + $docs + @('subjects.json', 'settings.json'))
     $extra = Get-ChildItem $dest -Force | Where-Object { $allowed -notcontains $_.Name }
     if ($extra) {
         Write-Host ''

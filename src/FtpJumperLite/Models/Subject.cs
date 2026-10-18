@@ -38,6 +38,20 @@ namespace FtpJumperLite.Models
         [JsonProperty("lastSyncAt")]
         public string LastSyncAt { get; set; } = "";
 
+        /// <summary>
+        /// 每科自定义强调色："#RRGGBB" 或色名（红/蓝/绿…）；留空 = 跟随主题。
+        /// 程序会把它规范成 "#RRGGBB"；非法值不致命，只会被忽略并记日志。
+        /// </summary>
+        [JsonProperty("color", NullValueHandling = NullValueHandling.Ignore)]
+        public string? ColorHex { get; set; }
+
+        /// <summary>
+        /// 每科底纹：stripe / dots / grid / gradient；留空 = 无底纹。
+        /// 纹理用该科的颜色（没写颜色就用主题强调色）以很低的不透明度叠在卡片底色上。
+        /// </summary>
+        [JsonProperty("texture", NullValueHandling = NullValueHandling.Ignore)]
+        public string? Texture { get; set; }
+
         /// <summary>是否为“网址内嵌凭据”模式（默认）。计算属性，不写入配置文件。</summary>
         [JsonIgnore]
         public bool IsInlineCredential =>

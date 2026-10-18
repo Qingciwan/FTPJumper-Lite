@@ -99,6 +99,16 @@ namespace FtpJumperLite.Services
                     return false;
                 }
 
+                // 每科外观（颜色/纹理）是"可选皮肤"：写错不该让整份配置加载失败，
+                // 这里先规范化（非法值置空并记日志），再做常规字段校验。
+                if (parsed.Subjects != null)
+                {
+                    foreach (var subject in parsed.Subjects)
+                    {
+                        SanitizeAppearance(subject);
+                    }
+                }
+
                 var problems = ValidateAll(parsed);
                 if (problems.Count > 0)
                 {
@@ -112,6 +122,75 @@ namespace FtpJumperLite.Services
             catch (Exception ex) when (IsIoError(ex))
             {
                 error = "读取配置文件失败：" + ex.Message;
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 规范化每科的外观字段：颜色统一成 "#RRGGBB"（或置空），纹理统一成小写预设名（或置空）。
+        /// 非法值只记日志、不阻断加载 —— 手工编辑配置时写错一个颜色不应该让整个程序打不开。
+        /// </summary>
+        public static void SanitizeAppearance(Subject subject)
+        {
+            if (subject == null)
+            {
+                return;
+            }
+
+            if (!SubjectStyles.TryNormalizeColor(subject.ColorHex, out var color))
+            {
+                AppLogger.Warn("科目「" + subject.Name + "」的 color=" + subject.ColorHex + " 不是合法颜色，已忽略。");
+                color = null;
+            }
+
+            subject.ColorHex = color;
+
+            if (!SubjectStyles.TryNormalizeTexture(subject.Texture, out var texture))
+            {
+                AppLogger.Warn("科目「" + subject.Name + "」的 texture=" + subject.Texture + " 不是支持的纹理，已忽略。");
+                texture = null;
+            }
+
+            subject.Texture = texture;
+        }
+
+        /// <summary>
+        /// 新增一个科目并写回配置文件：先整份校验，通过才落盘（失败时磁盘保持原样）。
+        /// 外观字段（颜色/纹理）写错不致命，会在写回前置空。
+        /// </summary>
+        public bool TryAddSubject(Subject subject, out string? error)
+        {
+            error = null;
+            if (subject == null)
+            {
+                error = "科目为空。";
+                return false;
+            }
+
+            if (!TryLoad(out var config, out var loadError) || config == null)
+            {
+                error = loadError ?? "无法读取配置文件。";
+                return false;
+            }
+
+            SanitizeAppearance(subject);
+            config.Subjects.Add(subject);
+
+            var problems = ValidateAll(config, ConfigPath);
+            if (problems.Count > 0)
+            {
+                error = "新增科目未通过校验：\r\n" + string.Join("\r\n", problems);
+                return false;
+            }
+
+            try
+            {
+                WriteFileAtomic(config);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = "写回配置失败：" + ex.Message;
                 return false;
             }
         }

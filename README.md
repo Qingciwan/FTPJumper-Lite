@@ -64,8 +64,7 @@
 3. 两者都失败时，弹窗给出可手动粘贴的**脱敏**网址（明文需要自己看配置）。
 
 > 为什么写死 explorer：ftp 是 URL 协议关联
-> （`HKCU\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\ftp`），教室里常被第三方浏览器抢走。
-> 本机实测该关联是 `Progid = 360ChromeURL`（`HKLM\SOFTWARE\Classes\ftp\shell\open\command` 指向 360 浏览器），
+> （`HKCU\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\ftp`），常被第三方浏览器抢走。
 > 而 `explorer.exe "ftp://user:pass@host:port/path/"` 能稳定打开资源管理器并列出远端目录，
 > 因此不再依赖系统关联，也就不必在每台一体机上改默认应用。
 
@@ -110,7 +109,7 @@
    不设列样式时列会按内容 AutoSize，被按钮文字撑得比窗口还宽 → 整行向右溢出、左右留白不对称（就是“不居中”）。
    同时每行文字按**像素宽度**截断（超出加省略号），保证文本既不换行也不超宽。
 
-### 实测环境与结论（本机）
+### 实测环境与结论
 
 | 项 | 值 |
 |---|---|
@@ -130,6 +129,48 @@
   窗体句柄可能在构造期间就被创建，那时字段还是 null，直接缩放会 `NullReferenceException`。
 
 最小窗口 470×520（逻辑）：再窄底部三个按钮就会被裁到窗口外。
+
+### 个性化：主题 / 字号 / 每科颜色
+
+界面右上角有一个**齿轮**，打开设置窗口可以改「主题」与「全局字号」；改完立即生效，不需要重启。
+这些设置存放在与 `subjects.json` 同目录的 **`settings.json`** 里，也可以直接用记事本改——
+保存后程序会自动重新加载（外部编辑也会生效，不必重启）。
+
+```json
+{
+  "version": 1,
+  "theme": "system",        // system 跟随系统 | light | dark | custom
+  "fontScale": 100,         // 60~200，global 字号（科目区 + 底部按钮一起缩放）
+  "palette": {
+    "light":  { },          // 覆盖内置浅色的任意键（颜色写成 "#RRGGBB" 或色名）
+    "dark":   { },          // 覆盖内置深色的任意键
+    "custom": { }           // 自定义主题：只写一侧，另一侧自动推导
+  }
+}
+```
+
+- **调色板的键**：`formBack`（页面底色）、`cardBack`、`cardBorder`、`cardHover`、`cardPressed`、
+  `titleText`、`subText`、`accent`、`scrollThumb`、`scrollThumbHover`、`hintText`。
+- **颜色写法**：`"#0078D4"`、`"#ABC"`（等价 `"#AABBCC"`），或中文/英文色名
+  （红/橙/黄/绿/青/蓝/紫/粉/棕/灰、red/orange/…）。写错不会让程序打不开，只会在日志里留一行提示。
+- **`custom` 只写一侧即可**：程序按“卡片底色是深还是浅”判断你写的是哪一侧，
+  另一侧按语义角色推导（保留色相、换明度区间），并对正文做 ≥ 4.5:1 的对比度兜底。
+  所以自定义主题同样能用「浅色 / 深色」切换。
+- **深色覆盖范围**：主窗体、科目卡片、自绘滚动条、底栏按钮、状态栏，以及标题栏
+  （`DwmSetWindowAttribute`，Win10 2004+/Win11；老系统自动跳过）。
+  消息弹窗与 tooltip 仍是系统外观。
+
+每科的**强调色与底纹**写在 `subjects.json` 里（属于科目数据，不在 settings.json 中）：
+
+```json
+{ "id": "yuwen", "name": "语文", "host": "ftp.example.com", ..., "color": "红", "texture": "stripe" }
+```
+
+- `color`：左侧色条 + 极淡的同色底（10% 不透明混色；悬停 16%、按下 20%，所以文字始终看得清）。
+  留空 = 跟随主题强调色。
+- `texture`：`stripe`（斜纹）、`dots`（点阵）、`grid`（网格）、`gradient`（渐变），
+  用该科颜色以很低的不透明度叠在卡片底色上；留空 = 无底纹。
+- 两者写错都只会在日志里留一行提示，不会影响配置加载。
 
 ---
 
@@ -230,7 +271,7 @@ FtpJumperLite.exe --url [科目id或名称] [--show-password] [--open] [--cfg �
 启动后按屏幕提示把示例科目粘进 `subjects.json`（`host` 填 `127.0.0.1`，端口与之一致），
 回程序点「刷新配置」，再单击该科目即可验证「拼网址 → 交给系统 → 浏览远端」。
 
-### 测试覆盖（53 项全绿）
+### 测试覆盖（82 项全绿）
 
 - 布局（**在真实 DPI 下运行**：测试线程显式声明 PerMonitorV2，本机即 1.75×）：
   - 5 种科目数（2/9/10/11/12）× 6 种窗口尺寸（含“不设尺寸 = 启动默认”）下：
@@ -251,6 +292,9 @@ FtpJumperLite.exe --url [科目id或名称] [--show-password] [--open] [--cfg �
 - 窗体布局回归（在 740×1000 / 697×680 / 660×620 / 470×520 四种尺寸下逐项校验）：
   底部三个按钮完整落在客户区内且不重叠；单列 10 行要么精确填满、要么按 64px 下限滚动；
   科目名块水平居中、两行文本不被裁切；字号表随行高单调递增且任何行高下都放得下。
+- 个性化（`ThemeTests`）：颜色/纹理写法的规范化与拒绝规则、主题推导（浅→深/深→浅都在各自明度区间、
+  强调色保留色相、正文对比度 ≥ 4.5:1）、主题模式选择（system/light/dark/custom）、
+  `settings.json` 往返与坏值收敛、`subjects.json` 外观字段写错时"置空但不影响加载"。
 - 布局核对工具：`tools\UiShot\UiShot.exe <配置> <宽> <高> <输出.png>` 可按任意尺寸渲染主窗体截图
   （本机 DPI 改不了时，用 2K@200% 的逻辑尺寸 697×680 渲染即可核对）。
 
@@ -263,8 +307,6 @@ FtpJumperLite.exe --url [科目id或名称] [--show-password] [--open] [--cfg �
 ## 6. 许可与合规
 
 - 本作品采用 **CC BY-NC-SA 4.0**（署名—非商业性使用—相同方式共享）许可，详见 `LICENSE.txt`。
-- 入库前请确认：仓库中不得包含真实 FTP 凭据（`release\`、`_private\`、`bin\`、`obj\`、`.packages\` 已在 `.gitignore` 中排除）。
-  **发布前请先在 `LICENSE.txt` 里补全署名与来源地址**（CC BY 要求署名 + 许可链接 + 是否修改）。
 - 随程序分发的第三方组件与许可：见 `THIRD-PARTY-NOTICES.txt`（当前只有 `Newtonsoft.Json`，MIT）。
 - 程序**不分发** .NET Framework 运行时；要求系统已启用 .NET Framework 4.8。
 - 凭据：所有账号密码以**明文**存放在 `subjects.json`，这是需求本身的要求。发布/外发前请把 `subjects.json`

@@ -31,6 +31,12 @@ namespace FtpJumperLite.Ui
         private const int DefaultRowHeightLogical = 92;
         private const int RowMarginLogical = 8;
         private const int BottomBarHeightLogical = 68;
+
+        // ---- 顶部工具条（齿轮）----
+        private const int HeaderHeightLogical = 44;
+        private const int HeaderPadRightLogical = 12;
+        private const int HeaderPadTopLogical = 2;
+        private const int GearSizeLogical = 30;
         private const int MinFormWidthLogical = 470;
         private const int MinFormHeightLogical = 520;
         private const int ButtonMinWidthLogical = 120;
@@ -69,7 +75,15 @@ namespace FtpJumperLite.Ui
 
         private readonly string _configPath;
         private readonly ConfigStore _configStore;
+        private readonly SettingsStore _settingsStore;
+        private readonly Timer _settingsReloadTimer;
+        private UiSettings _settings;
+        private FileSystemWatcher? _settingsWatcher;
+        private bool _isDark;
         private readonly TableLayoutPanel _root;
+        private readonly TableLayoutPanel _header;
+        private readonly Win11Button _addSubjectButton;
+        private readonly Win11Button _gear;
         private readonly TableLayoutPanel _bottom;
         private readonly SubjectListControl _subjectList;
         private readonly Win11Button _btnRefresh;
@@ -88,6 +102,16 @@ namespace FtpJumperLite.Ui
             _configPath = string.IsNullOrWhiteSpace(configPath) ? ConfigStore.DefaultConfigPath : configPath!;
             _configStore = new ConfigStore(_configPath);
 
+            // 个性化设置：与 subjects.json 同目录的 settings.json；缺失时用默认值（主题跟随系统）。
+            _settingsStore = new SettingsStore(SettingsStore.PathForConfigFile(_configPath));
+            _settings = LoadSettings();
+            _settingsReloadTimer = new Timer { Interval = 300 };
+            _settingsReloadTimer.Tick += (_, _) =>
+            {
+                _settingsReloadTimer.Stop();
+                ReloadSettings();
+            };
+
             // 自己按 DPI 缩放全部尺寸，禁用 WinForms 的字体自动缩放，避免"双重缩放 / 尺寸不可预期"。
             AutoScaleMode = AutoScaleMode.None;
             _dpiScale = CurrentDpiScale();
@@ -102,6 +126,8 @@ namespace FtpJumperLite.Ui
                 Icon = appIcon;
             }
 
+            _palette = ResolvePalette(out _isDark);
+
             // 默认尺寸：单列刚好放下 10 个科目，并尽量占满屏幕可用高度。
             // workArea 已经是当前 DPI 下的像素，只有"下限/上限"这类常量需要 Scale。
             var workArea = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 800);
@@ -113,12 +139,55 @@ namespace FtpJumperLite.Ui
             // 最小宽度必须能完整容纳底部三个按钮（各 120 + 间距 + 边距），否则会被裁到窗口外。
             MinimumSize = new Size(Scale(MinFormWidthLogical), Scale(MinFormHeightLogical));
 
-            _root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
+            _root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4 };
             // 列必须固定占满整宽，否则列会按内容 AutoSize、把整行撑得比窗口还宽。
             _root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            _root.RowStyles.Add(new RowStyle(SizeType.Absolute, Scale(HeaderHeightLogical) * FontScaleFactor));
             _root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            _root.RowStyles.Add(new RowStyle(SizeType.Absolute, Scale(BottomBarHeightLogical)));
+            _root.RowStyles.Add(new RowStyle(SizeType.Absolute, Scale(BottomBarHeightLogical) * FontScaleFactor));
             _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            // 顶部细工具条：右侧一个齿轮（主题/字号设置入口）。Win11 的做法就是标题区右上角放设置。
+            _header = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 3,
+                RowCount = 1,
+                BackColor = _palette.FormBack,
+                Padding = new Padding(Scale(HeaderPadRightLogical), Scale(HeaderPadTopLogical), Scale(HeaderPadRightLogical), 0)
+            };
+            _header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            _header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            _header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            _addSubjectButton = new Win11Button
+            {
+                Text = "+",
+                AutoSize = false,
+                Size = new Size(Scale(GearSizeLogical), Scale(GearSizeLogical)),
+                MinimumSize = new Size(Scale(GearSizeLogical), Scale(GearSizeLogical)),
+                Margin = new Padding(0, 0, Scale(6), 0),
+                Font = new Font("Segoe UI Symbol", 11F),
+                Palette = _palette,
+                DpiScale = _dpiScale
+            };
+            _addSubjectButton.Click += (_, _) => AddSubject();
+            new ToolTip().SetToolTip(_addSubjectButton, "新增科目（写入 subjects.json）");
+            _header.Controls.Add(_addSubjectButton, 1, 0);
+            _gear = new Win11Button
+            {
+                Text = "⚙",
+                AutoSize = false,
+                Size = new Size(Scale(GearSizeLogical), Scale(GearSizeLogical)),
+                MinimumSize = new Size(Scale(GearSizeLogical), Scale(GearSizeLogical)),
+                Margin = new Padding(0),
+                Font = new Font("Segoe UI Symbol", 11F),
+                Palette = _palette,
+                DpiScale = _dpiScale
+            };
+            _gear.Click += (_, _) => OpenSettings();
+            new ToolTip().SetToolTip(_gear, "设置（主题 / 字号）");
+            _header.Controls.Add(_gear, 2, 0);
+            _root.Controls.Add(_header, 0, 0);
 
             _subjectList = new SubjectListControl
             {
@@ -129,7 +198,7 @@ namespace FtpJumperLite.Ui
                 TooltipProvider = BuildTooltip
             };
             _subjectList.SubjectActivated += (_, e) => OpenSubject(e.Subject);
-            _root.Controls.Add(_subjectList, 0, 0);
+            _root.Controls.Add(_subjectList, 0, 1);
 
             _btnRefresh = MakeBottomButton("刷新配置", (_, _) => ReloadSubjects());
             _btnOpenConfig = MakeBottomButton("打开配置目录", OpenConfigDirectory);
@@ -155,7 +224,7 @@ namespace FtpJumperLite.Ui
             _bottom.Controls.Add(_btnRefresh, 1, 0);
             _bottom.Controls.Add(_btnOpenConfig, 2, 0);
             _bottom.Controls.Add(_btnQuit, 3, 0);
-            _root.Controls.Add(_bottom, 0, 1);
+            _root.Controls.Add(_bottom, 0, 2);
 
             var statusStrip = new StatusStrip
             {
@@ -166,7 +235,7 @@ namespace FtpJumperLite.Ui
             };
             _statusLabel = new ToolStripStatusLabel { Spring = false };
             statusStrip.Items.Add(_statusLabel);
-            _root.Controls.Add(statusStrip, 0, 2);
+            _root.Controls.Add(statusStrip, 0, 3);
 
             Controls.Add(_root);
             BackColor = _palette.FormBack;
@@ -176,6 +245,7 @@ namespace FtpJumperLite.Ui
 
             // 字段全部就绪：从这里开始才允许按真实 DPI 重新缩放（见 TryApplyDpiScaling）。
             _layoutReady = true;
+            HookSettingsWatcher();
         }
 
         // ---------- DPI ----------
@@ -183,7 +253,7 @@ namespace FtpJumperLite.Ui
         /// <summary>当前 DPI 相对 96 的倍数（1.0 = 100%，2.0 = 200%）。</summary>
         public float DpiScale => _dpiScale;
 
-        /// <summary>方案配色（阶段二固定为 Win11 浅色；阶段四由主题接管）。</summary>
+        /// <summary>当前生效的配色（由 settings.json + 系统深浅色解析而来）。</summary>
         public UiPalette Palette
         {
             get => _palette;
@@ -191,8 +261,273 @@ namespace FtpJumperLite.Ui
             {
                 _palette = value ?? UiPalette.Light();
                 BackColor = _palette.FormBack;
+                _bottom.BackColor = _palette.FormBack;
+                foreach (var button in new[] { _btnRefresh, _btnOpenConfig, _btnQuit })
+                {
+                    button.Palette = _palette;
+                    button.Invalidate();
+                }
+
+                if (_statusLabel.Owner is StatusStrip strip)
+                {
+                    strip.BackColor = _palette.FormBack;
+                    strip.ForeColor = _palette.SubText;
+                }
+
+                _statusLabel.ForeColor = _palette.SubText;
                 _subjectList.Palette = _palette;
+                if (_header != null)
+                {
+                    _header.BackColor = _palette.FormBack;
+                }
+
+                if (_gear != null)
+                {
+                    _gear.Palette = _palette;
+                    _gear.Invalidate();
+                }
+
+                Invalidate(true);
             }
+        }
+
+        /// <summary>新增科目：字段级表单 → 整份校验 → 写回 subjects.json → 重新加载。</summary>
+        private void AddSubject()
+        {
+            using (var dialog = new SubjectEditorForm(_palette, _dpiScale))
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK)
+                {
+                    return;
+                }
+
+                var subject = dialog.Result;
+                if (!_configStore.TryAddSubject(subject, out var error))
+                {
+                    MessageBox.Show(this, error, "新增科目失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                ReloadSubjects();
+                _statusLabel.Text = "已新增科目「" + subject.Name + "」，已写回 subjects.json。";
+                AppLogger.Info("已新增科目：" + subject.Id + "（" + subject.Name + "）");
+            }
+        }
+
+        /// <summary>打开设置窗口（主题 / 字号）：确定后写回 settings.json 并立即生效，不需要重启。</summary>
+        private void OpenSettings()
+        {
+            using (var dialog = new SettingsForm(_settings, _palette, _dpiScale))
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK)
+                {
+                    return;
+                }
+
+                _settings = dialog.Result;
+                if (!_settingsStore.TrySave(_settings, out var error))
+                {
+                    MessageBox.Show(this, error, "设置保存失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+
+                ApplySettings();
+                _statusLabel.Text = "设置已更新：主题=" + _settings.Theme + "，字号=" + _settings.FontScale + "%。";
+                AppLogger.Info("设置已保存：theme=" + _settings.Theme + " fontScale=" + _settings.FontScale);
+            }
+        }
+
+        // ---------- 设置与主题 ----------
+
+        private UiSettings LoadSettings()
+        {
+            if (_settingsStore.TryLoad(out var settings, out var error))
+            {
+                AppLogger.Info("已加载设置：theme=" + settings.Theme
+                               + " fontScale=" + settings.FontScale
+                               + " 自定义调色板=" + (settings.Palette?.Custom != null && !settings.Palette.Custom.IsEmpty));
+                return settings;
+            }
+
+            AppLogger.Warn("设置读取失败，先用默认设置：" + error);
+            return UiSettings.CreateDefault();
+        }
+
+        /// <summary>按当前的 settings + 系统深浅色解析出调色板，并记录最终选了哪一侧。</summary>
+        private UiPalette ResolvePalette(out bool isDark)
+        {
+            var systemDark = ThemeResolver.IsSystemDarkTheme();
+            var palette = ThemeResolver.Resolve(_settings, systemDark, out isDark, out var note);
+            if (!string.IsNullOrEmpty(note))
+            {
+                AppLogger.Warn("主题解析：" + note);
+            }
+
+            return palette;
+        }
+
+        /// <summary>settings.json 被外部改动后重新加载并立即生效（不重启）。</summary>
+        private void ReloadSettings()
+        {
+            if (IsDisposed)
+            {
+                return;
+            }
+
+            _settings = LoadSettings();
+            ApplySettings();
+        }
+
+        /// <summary>把当前设置整体套到界面上（配色 + 字号 + 标题栏）。</summary>
+        private void ApplySettings()
+        {
+            Palette = ResolvePalette(out _isDark);
+            ApplyFontScale();
+            ApplyTitleBarTheme();
+            AppLogger.Info("设置已生效：theme=" + _settings.Theme + " fontScale=" + _settings.FontScale
+                           + " → " + (_isDark ? "深色" : "浅色"));
+        }
+
+        /// <summary>字号缩放：科目区（含行高拟合）与底部按钮一起缩放，底栏高度同步变高，避免文字被裁。</summary>
+        private void ApplyFontScale()
+        {
+            var factor = FontScaleFactor;
+
+            _root.RowStyles[0].Height = Scale(HeaderHeightLogical) * factor;
+            _root.RowStyles[2].Height = Scale(BottomBarHeightLogical) * factor;
+            var gearSize = new Size(
+                (int)Math.Round(Scale(GearSizeLogical) * Math.Min(1.5F, factor)),
+                (int)Math.Round(Scale(GearSizeLogical) * Math.Min(1.5F, factor)));
+            _gear.Size = gearSize;
+            _gear.MinimumSize = gearSize;
+            _gear.Font = new Font("Segoe UI Symbol", 11F * Math.Min(1.5F, factor));
+            _gear.DpiScale = _dpiScale;
+            _gear.Palette = _palette;
+            foreach (var button in new[] { _btnRefresh, _btnOpenConfig, _btnQuit })
+            {
+                var size = 12F * factor;
+                if (Math.Abs(button.Font.Size - size) > 0.01F)
+                {
+                    var old = button.Font;
+                    button.Font = new Font("Microsoft YaHei UI", size);
+                    if (old != null && !ReferenceEquals(old, Control.DefaultFont))
+                    {
+                        old.Dispose();
+                    }
+                }
+
+                button.MinimumSize = new Size(
+                    (int)Math.Round(Scale(ButtonMinWidthLogical) * factor),
+                    (int)Math.Round(Scale(ButtonMinHeightLogical) * factor));
+            }
+
+            // Metrics 里的 FontScale 会驱动科目区重算字号与内容下限。
+            _subjectList.Metrics = CreateRowMetrics();
+        }
+
+        /// <summary>标题栏深浅色（Win10 2004+/Win11）。dwmapi 不可用或系统过老时静默跳过。</summary>
+        private void ApplyTitleBarTheme()
+        {
+            if (!IsHandleCreated)
+            {
+                return;
+            }
+
+            try
+            {
+                var useDark = _isDark ? 1 : 0;
+                var hr = DwmSetWindowAttribute(Handle, 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, ref useDark, sizeof(int));
+                if (hr != 0)
+                {
+                    // Win10 1809~1909 用的是 19。
+                    DwmSetWindowAttribute(Handle, 19, ref useDark, sizeof(int));
+                }
+
+                var corner = 2; // DWMWA_WINDOW_CORNER_PREFERENCE = ROUND
+                DwmSetWindowAttribute(Handle, 33, ref corner, sizeof(int));
+            }
+            catch
+            {
+                // 没有 DWM（远程会话/老系统）就算了，主体界面仍然是自绘的。
+            }
+        }
+
+        [System.Runtime.InteropServices.DllImport("dwmapi.dll", PreserveSig = true)]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+
+        /// <summary>监视 settings.json：外部编辑保存后自动重新加载（连发事件用计时器合并）。</summary>
+        private void HookSettingsWatcher()
+        {
+            try
+            {
+                var dir = Path.GetDirectoryName(_settingsStore.Path);
+                if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir))
+                {
+                    return;
+                }
+
+                _settingsWatcher = new FileSystemWatcher(dir, "settings.json")
+                {
+                    NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size
+                };
+                _settingsWatcher.Changed += (_, _) => ScheduleSettingsReload();
+                _settingsWatcher.Created += (_, _) => ScheduleSettingsReload();
+                _settingsWatcher.Renamed += (_, _) => ScheduleSettingsReload();
+                _settingsWatcher.EnableRaisingEvents = true;
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Warn("无法监视 settings.json（改动后需重启才生效）：" + ex.Message);
+            }
+        }
+
+        private void ScheduleSettingsReload()
+        {
+            try
+            {
+                if (IsDisposed || !IsHandleCreated)
+                {
+                    return;
+                }
+
+                BeginInvoke(new Action(() =>
+                {
+                    _settingsReloadTimer.Stop();
+                    _settingsReloadTimer.Start();
+                }));
+            }
+            catch
+            {
+                // 窗体正在销毁时忽略。
+            }
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            base.WndProc(ref m);
+
+            const int WmSettingChange = 0x001A;
+            const int WmThemeChanged = 0x031A;
+            if ((m.Msg == WmSettingChange || m.Msg == WmThemeChanged) && _layoutReady)
+            {
+                // 系统深浅色变了：只有"跟随系统"的模式需要立刻重涂（强制浅/深时保持用户的选择）。
+                var mode = (_settings.Theme ?? "system").Trim().ToLowerInvariant();
+                if (mode == "system" || mode == "custom")
+                {
+                    ApplySettings();
+                }
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _settingsWatcher?.Dispose();
+                _settingsWatcher = null;
+                _settingsReloadTimer?.Dispose();
+            }
+
+            base.Dispose(disposing);
         }
 
         /// <summary>把 96 DPI 逻辑像素换算成当前 DPI 的像素。</summary>
@@ -222,9 +557,12 @@ namespace FtpJumperLite.Ui
                 PadRightLogical = TablePadRightLogical,
                 PadTopLogical = TablePadTopLogical,
                 PadBottomLogical = TablePadBottomLogical,
-                FontScale = 1F
+                FontScale = FontScaleFactor
             };
         }
+
+        /// <summary>全局字号缩放倍数（settings.json 的 fontScale/100，夹在 60%~200%）。</summary>
+        private float FontScaleFactor => Math.Max(0.6F, Math.Min(2.0F, _settings.FontScale / 100F));
 
         private float CurrentDpiScale()
         {
@@ -302,6 +640,7 @@ namespace FtpJumperLite.Ui
         {
             base.OnHandleCreated(e);
             TryApplyDpiScaling();
+            ApplyTitleBarTheme();
         }
 
         protected override void OnLoad(EventArgs e)
@@ -315,6 +654,9 @@ namespace FtpJumperLite.Ui
             // "还没有尺寸的窗体"生效（或被系统默认级联位置顶掉），于是 200% 机器上窗口落在屏幕左上角、
             // 下沿压住任务栏。这里显式居中并夹进工作区，位置只由最终尺寸决定。
             CenterOnPrimaryWorkArea();
+
+            // 句柄可能在着色板之前就建好了（RealDpi），这里按最终的主题再刷一次标题栏。
+            ApplyTitleBarTheme();
         }
 
         protected override void OnShown(EventArgs e)
@@ -404,7 +746,9 @@ namespace FtpJumperLite.Ui
         /// <summary>DPI 变化后重新套用所有与 DPI 相关的尺寸。</summary>
         private void ApplyDpiScaling()
         {
-            _root.RowStyles[1].Height = Scale(BottomBarHeightLogical);
+            var factor = FontScaleFactor;
+            _root.RowStyles[0].Height = Scale(HeaderHeightLogical) * factor;
+            _root.RowStyles[2].Height = Scale(BottomBarHeightLogical) * factor;
             _bottom.Padding = new Padding(
                 Scale(BottomPadLeftLogical),
                 Scale(BottomPadTopLogical),
@@ -426,14 +770,17 @@ namespace FtpJumperLite.Ui
 
         private Win11Button MakeBottomButton(string text, EventHandler onClick)
         {
+            var factor = FontScaleFactor;
             var b = new Win11Button
             {
                 Text = text,
                 AutoSize = true,
                 AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                MinimumSize = new Size(Scale(ButtonMinWidthLogical), Scale(ButtonMinHeightLogical)),
+                MinimumSize = new Size(
+                    (int)Math.Round(Scale(ButtonMinWidthLogical) * factor),
+                    (int)Math.Round(Scale(ButtonMinHeightLogical) * factor)),
                 Margin = new Padding(Scale(RowMarginLogical), 0, 0, 0),
-                Font = new Font("Microsoft YaHei UI", 12F),
+                Font = new Font("Microsoft YaHei UI", 12F * factor),
                 Palette = _palette,
                 DpiScale = _dpiScale
             };
@@ -539,14 +886,23 @@ namespace FtpJumperLite.Ui
 
         /// <summary>
         /// 由"文本 + 可用宽高"反推最大可容纳字号：从上限开始每 0.5pt 递减，
-        /// 直到两行文本放得下为止。paddingPx 是拟合时预留的垂直内缩（默认按按钮的 6px）。
+        /// 直到两行文本放得下为止。paddingPx 是拟合时预留的垂直内缩（默认按按钮的 6px）；
+        /// min/maxFontSize 允许调用方按全局字号缩放（settings.json 的 fontScale）改写上下限。
         /// </summary>
-        public static float ComputeFittingFontSize(string text, int availableWidth, int rowHeight, int paddingPx = ButtonPadding)
+        public static float ComputeFittingFontSize(
+            string text,
+            int availableWidth,
+            int rowHeight,
+            int paddingPx = ButtonPadding,
+            float minFontSize = MinSubjectNameFontSize,
+            float maxFontSize = MaxSubjectNameFontSize)
         {
             var maxTextHeight = Math.Max(1, rowHeight - paddingPx);
             var maxTextWidth = Math.Max(1, availableWidth);
+            var min = Math.Max(6F, minFontSize);
+            var max = Math.Max(min + 0.5F, maxFontSize);
 
-            for (var size = MaxSubjectNameFontSize; size > MinSubjectNameFontSize; size -= 0.5F)
+            for (var size = max; size > min; size -= 0.5F)
             {
                 if (MeasureTwoLineHeight(text, size, maxTextWidth) <= maxTextHeight)
                 {
@@ -554,7 +910,7 @@ namespace FtpJumperLite.Ui
                 }
             }
 
-            return MinSubjectNameFontSize;
+            return min;
         }
 
         /// <summary>量测给定字号下两行文本的高度（只量高度，宽度用于换行判断）。</summary>
