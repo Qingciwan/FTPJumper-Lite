@@ -15,8 +15,10 @@ namespace FtpJumperLite.Tests
 {
     /// <summary>
     /// 主窗体布局回归测试：用 STA 线程真实创建窗体（不显示），程序化校验
-    /// 1) 底部按钮完整落在客户区内（防止“按钮半个在窗口外”）；
-    /// 2) 单列布局下 10 个科目刚好放下、不溢出。
+    /// 1) 底部按钮完整落在客户区内（防止"按钮半个在窗口外"）；
+    /// 2) 单列布局下 10 个科目刚好放下、不溢出，且"放得下时不得出现滚动条"。
+    /// 科目区自阶段二起是自绘控件 <see cref="SubjectListControl"/>，几何断言走它自己的 API
+    /// （RowHeightPx / GetRowBounds / ContentHeightPx / MaxScrollPx / ScrollOffsetPx）。
     /// </summary>
     public sealed class MainFormLayoutTests : IDisposable
     {
@@ -61,7 +63,7 @@ namespace FtpJumperLite.Tests
 
         /// <summary>
         /// 让当前线程按 PerMonitorV2 感知 DPI：否则测试宿主是非感知进程，窗口会被虚拟化成 96 DPI，
-        /// 于是“高 DPI 布局”这条路径永远测不到（本机实际是 175%，DeviceDpi=168）。
+        /// 于是"高 DPI 布局"这条路径永远测不到。
         /// </summary>
         private static void MakeThreadDpiAware()
         {
@@ -104,9 +106,9 @@ namespace FtpJumperLite.Tests
         }
 
         /// <summary>
-        /// 科目行的几何不变式：**所有行等高等宽、左右留白对称、最后一行不得被拉伸**。
+        /// 科目行的几何不变式：**所有行等高、左右留白对称、行内文本放得下**。
         /// 覆盖 2 / 9 / 10 / 11 / 12 个科目（越过 MaxVisibleRows=10 的分界）以及
-        /// “不设尺寸 = 程序启动时的默认尺寸”这一场景。
+        /// "不设尺寸 = 程序启动时的默认尺寸"这一场景。
         /// </summary>
         [Theory]
         [InlineData(2)]
@@ -166,49 +168,63 @@ namespace FtpJumperLite.Tests
                 form.CreateControl();
                 form.PerformLayout();
 
-                var table = GetPrivateField<TableLayoutPanel>(form, "_subjectTable");
-                var rows = table.Controls.Cast<Control>().ToList();
-                var heights = rows.Select(r => r.Height).ToList();
-                var leftGap = rows.Min(r => r.Left);
-                var rightGap = rows.Min(r => table.ClientSize.Width - r.Right);
-                var scrollbar = table.VerticalScroll.Visible ? SystemInformation.VerticalScrollBarWidth : 0;
-                var info = "行数=" + rows.Count
-                           + " 行高=[" + string.Join(",", heights) + "]"
-                           + " 左留白=" + leftGap + " 右留白=" + rightGap
-                           + " 表client=" + table.ClientSize + " padding=" + table.Padding
-                           + " 滚动=" + table.VerticalScroll.Visible;
+                var list = GetList(form);
+                var dpi = list.DpiScale;
+                var padLeft = MainForm.ScaleFor(list.Metrics.PadLeftLogical, dpi);
+                var padRight = MainForm.ScaleFor(list.Metrics.PadRightLogical, dpi);
+                var padTop = MainForm.ScaleFor(list.Metrics.PadTopLogical, dpi);
+                var gap = MainForm.ScaleFor(list.Metrics.RowGapLogical, dpi);
+                var cardPadX = MainForm.ScaleFor(list.Metrics.CardPadXLogical, dpi);
+                var cardPadY = MainForm.ScaleFor(list.Metrics.CardPadYLogical, dpi);
+                var safety = MainForm.ScaleFor(list.Metrics.TextSafetyLogical, dpi);
+                var scrollReserve = list.MaxScrollPx > 0
+                    ? MainForm.ScaleFor(list.Metrics.ScrollBarWidthLogical, dpi) + MainForm.ScaleFor(4, dpi)
+                    : 0;
 
-                // 1) 所有科目行等高
-                Assert.True(heights.Max() - heights.Min() <= 1, "行高不一致（最后一行被拉伸？）：" + info);
+                var count = list.Subjects.Count;
+                var info = "行数=" + count + " 行高=" + list.RowHeightPx + " 内容高=" + list.ContentHeightPx
+                           + " 可滚动=" + list.MaxScrollPx + " 偏移=" + list.ScrollOffsetPx
+                           + " 科目区=" + list.ClientSize;
 
-                // 2) 左右留白对称（有滚动条时右侧会多出滚动条宽度）
-                Assert.True(
-                    Math.Abs(leftGap - rightGap) <= scrollbar + 1,
-                    "行未水平居中（左右留白不对称）：" + info);
+                Assert.True(count > 0, "应有科目行：" + info);
+                Assert.True(list.RowHeightPx > 0, "行高应为正：" + info);
 
-                // 3) 行宽 + 左右留白 = 表格客户区宽（确认没有被裁切）
-                Assert.Equal(table.ClientSize.Width, leftGap + rows[0].Width + rightGap);
-
-                // 4) 每行都必须装得下自己的两行文本——这是“最后一行被撑开 / 文字被裁”的根因不变式：
-                //    一旦行高小于内容所需，TableLayoutPanel 就会自行重排并把多余空间塞给最后一行。
-                foreach (var row in rows)
+                // 1) 所有行等高、等宽、左边界一致（行高由可用高度平分而来，不允许某一行被拉伸）
+                var first = list.GetRowBounds(0);
+                for (var i = 0; i < count; i++)
                 {
-                    var button = Assert.IsType<Button>(row);
-                    var textHeight = MainForm.MeasureTwoLineHeight(
-                        button.Text,
-                        button.Font.Size,
-                        Math.Max(1, button.ClientSize.Width - 6));
-                    Assert.True(
-                        textHeight <= Math.Max(1, button.ClientSize.Height - 6),
-                        "行内容放不下（会触发重排/裁切）：文本高 " + textHeight
-                        + " > 可用高 " + Math.Max(1, button.ClientSize.Height - 6)
-                        + "（字号 " + button.Font.Size + "）| " + info);
+                    var bounds = list.GetRowBounds(i);
+                    Assert.Equal(first.Height, bounds.Height);
+                    Assert.Equal(first.Width, bounds.Width);
+                    Assert.Equal(first.X, bounds.X);
+                    Assert.True(bounds.Right <= list.ClientSize.Width, "科目行右侧越界：" + bounds + " | " + info);
                 }
+
+                // 2) 左右留白对称（出现滚动条时右侧多出滚动条保留宽度）
+                Assert.Equal(padLeft, first.X);
+                Assert.Equal(padRight + scrollReserve, list.ClientSize.Width - first.Right);
+
+                // 3) 不滚动时首行顶部正好是内边距；内容放得下时绝不允许出现滚动范围
+                if (list.MaxScrollPx == 0)
+                {
+                    Assert.Equal(padTop, first.Top);
+                }
+
+                // 4) 每行的两行文本都必须放得下（字号拟合的根因不变式：行高不足会直接裁字）
+                var textWidth = Math.Max(1, first.Width - (2 * cardPadX));
+                var cardHeight = list.RowHeightPx - gap;
+                var budget = Math.Max(1, cardHeight - (2 * cardPadY) - safety);
+                var measured = MainForm.MeasureTwoLineHeight("国\r\n国", list.TitleFontSize, textWidth);
+                Assert.True(
+                    measured <= budget,
+                    "行内容放不下（会裁字）：文本高 " + measured + " > 预算 " + budget
+                    + "（字号 " + list.TitleFontSize + "）| " + info);
+                Assert.InRange(list.TitleFontSize, MainForm.MinSubjectNameFontSize, MainForm.MaxSubjectNameFontSize);
             }
         }
 
         /// <summary>
-        /// 行高必须与 DPI **等比** 缩放：字号是“点”（随 DPI 变大），行高常量是像素，
+        /// 行高必须与 DPI **等比** 缩放：字号是"点"（随 DPI 变大），行高常量是像素，
         /// 两者不同步就是 2K@200% 下那两类布局问题的根源。
         /// </summary>
         [Fact]
@@ -218,7 +234,7 @@ namespace FtpJumperLite.Tests
             Assert.Equal(128, MainForm.ScaleFor(64, 2F));
             Assert.Equal(96, MainForm.ScaleFor(64, 1.5F));
 
-            // 同一“逻辑”可用高度下，200% 的行高必须是 100% 的两倍
+            // 同一"逻辑"可用高度下，200% 的行高必须是 100% 的两倍
             foreach (var (logicalAvailable, count) in new[] { (520, 10), (900, 10), (300, 5), (460, 11), (2000, 10) })
             {
                 var at100 = MainForm.ComputeRowHeightPx(logicalAvailable, count, 1F, 0);
@@ -235,21 +251,22 @@ namespace FtpJumperLite.Tests
             Assert.Equal(200, MainForm.ComputeRowHeightPx(520, 10, 1F, 200));
             Assert.Equal(400, MainForm.ComputeRowHeightPx(1040, 10, 2F, 400));
 
-            // 11 个科目（超过一屏）时，行高按“可见 10 行”平分并滚动的下限计算，绝不因为多一行而变矮
+            // 11 个科目（超过一屏）时，行高按"可见 10 行"平分并滚动的下限计算，绝不因为多一行而变矮
             Assert.Equal(
                 MainForm.ComputeRowHeightPx(460, 10, 1F, 0),
                 MainForm.ComputeRowHeightPx(460, 11, 1F, 0));
         }
 
         /// <summary>
-        /// 临时诊断：把窗口尺寸按网格扫一遍，收集所有“行高不一致 / 左右留白不对称”的组合。
+        /// 把窗口尺寸按网格扫一遍，收集所有几何违规：行高不一致 / 左右留白不对称 /
+        /// 内容放得下却可滚动 / 首行被裁 / 行内文本放不下。
         /// </summary>
         [Fact]
         public void Sweep_FindGeometryViolations()
         {
             var widths = new[] { 420, 455, 500, 560, 620, 700, 800, 1000, 1200 };
             var heights = new[] { 420, 480, 520, 560, 600, 632, 680, 760, 860, 1000 };
-            var problems = new System.Collections.Generic.List<string>();
+            var problems = new List<string>();
 
             foreach (var count in new[] { 2, 11 })
             {
@@ -271,35 +288,53 @@ namespace FtpJumperLite.Tests
                                     form.CreateControl();
                                     form.PerformLayout();
 
-                                    var table = GetPrivateField<TableLayoutPanel>(form, "_subjectTable");
-                                    var rows = table.Controls.Cast<Control>().ToList();
-                                    var hs = rows.Select(r => r.Height).ToList();
-                                    var left = rows.Min(r => r.Left);
-                                    var right = rows.Min(r => table.ClientSize.Width - r.Right);
-                                    var bar = table.VerticalScroll.Visible ? SystemInformation.VerticalScrollBarWidth : 0;
+                                    var list = GetList(form);
+                                    var dpi = list.DpiScale;
+                                    var padLeft = MainForm.ScaleFor(list.Metrics.PadLeftLogical, dpi);
+                                    var padRight = MainForm.ScaleFor(list.Metrics.PadRightLogical, dpi);
+                                    var padTop = MainForm.ScaleFor(list.Metrics.PadTopLogical, dpi);
+                                    var padBottom = MainForm.ScaleFor(list.Metrics.PadBottomLogical, dpi);
+                                    var gap = MainForm.ScaleFor(list.Metrics.RowGapLogical, dpi);
+                                    var cardPadX = MainForm.ScaleFor(list.Metrics.CardPadXLogical, dpi);
+                                    var cardPadY = MainForm.ScaleFor(list.Metrics.CardPadYLogical, dpi);
+                                    var safety = MainForm.ScaleFor(list.Metrics.TextSafetyLogical, dpi);
+                                    var scrollReserve = list.MaxScrollPx > 0
+                                        ? MainForm.ScaleFor(list.Metrics.ScrollBarWidthLogical, dpi) + MainForm.ScaleFor(4, dpi)
+                                        : 0;
 
-                                    if (hs.Max() - hs.Min() > 1)
+                                    var avail = list.ClientSize.Height - padTop - padBottom;
+                                    var fits = list.ContentHeightPx <= avail;
+                                    var first = list.GetRowBounds(0);
+
+                                    if (fits && list.MaxScrollPx != 0)
                                     {
                                         problems.Add(string.Format(
-                                            "行高不一致 count={0} {1}x{2}: [{3}] 表={4} 滚动={5}",
-                                            count, w, h, string.Join(",", hs), table.ClientSize, table.VerticalScroll.Visible));
+                                            "内容放得下却可滚动 count={0} {1}x{2}: 内容={3} 可用={4} 行高={5}",
+                                            count, w, h, list.ContentHeightPx, avail, list.RowHeightPx));
                                     }
 
-                                    if (Math.Abs(left - right) > bar + 1)
+                                    if (fits && first.Top != padTop)
                                     {
                                         problems.Add(string.Format(
-                                            "留白不对称 count={0} {1}x{2}: 左={3} 右={4} 行宽={5} 表宽={6} padding={7} 滚动={8}",
-                                            count, w, h, left, right, rows[0].Width, table.ClientSize.Width, table.Padding, table.VerticalScroll.Visible));
+                                            "首行被裁 count={0} {1}x{2}: top={3} 期望={4}",
+                                            count, w, h, first.Top, padTop));
                                     }
 
-                                    // 内容明明放得下却冒出纵向滚动条 —— 这正是目标机上"首行被切"的现场特征。
-                                    var rowSpace = rows.Sum(r => r.Height + r.Margin.Vertical);
-                                    if (table.VerticalScroll.Visible
-                                        && table.Padding.Vertical + rowSpace <= table.ClientSize.Height)
+                                    if (first.X != padLeft || list.ClientSize.Width - first.Right != padRight + scrollReserve)
                                     {
                                         problems.Add(string.Format(
-                                            "内容放得下却出现纵向滚动条 count={0} {1}x{2}: 行合计={3} 表client={4} 行高=[{5}]",
-                                            count, w, h, rowSpace, table.ClientSize, string.Join(",", hs)));
+                                            "留白不对称 count={0} {1}x{2}: 左={3} 右={4} 期望左={5} 期望右={6}",
+                                            count, w, h, first.X, list.ClientSize.Width - first.Right, padLeft, padRight + scrollReserve));
+                                    }
+
+                                    var textWidth = Math.Max(1, first.Width - (2 * cardPadX));
+                                    var budget = Math.Max(1, list.RowHeightPx - gap - (2 * cardPadY) - safety);
+                                    var measured = MainForm.MeasureTwoLineHeight("国\r\n国", list.TitleFontSize, textWidth);
+                                    if (measured > budget)
+                                    {
+                                        problems.Add(string.Format(
+                                            "文本放不下 count={0} {1}x{2}: {3} > {4}（字号 {5}）",
+                                            count, w, h, measured, budget, list.TitleFontSize));
                                     }
                                 }
                             }
@@ -320,168 +355,7 @@ namespace FtpJumperLite.Tests
                 "共 " + problems.Count + " 处违规：\r\n" + string.Join("\r\n", problems.Take(40)));
         }
 
-        /// <summary>
-        /// 窗口落位（纯函数）：目标机现场是 200% 下默认窗口 1428x1984 落在屏幕左上角、
-        /// 下沿压住任务栏；这里把"工作区内居中 + 绝不越界"钉死。
-        /// </summary>
-        [Fact]
-        public void ComputeCenteredLocation_CentersAndStaysInsideWorkArea()
-        {
-            var work = new Rectangle(0, 0, 3840, 2064);   // 4K@200% 的工作区（任务栏 96px）
-            var size = new Size(1428, 1984);
-            var p = MainForm.ComputeCenteredLocation(size, work);
-
-            Assert.Equal(new Point(1206, 40), p);
-            Assert.True(work.Contains(new Rectangle(p, size)), "窗口应完整落在工作区内：" + p);
-
-            // 比工作区还大：贴左上角，绝不出现负坐标（负坐标会跑到屏幕外或压住任务栏）。
-            Assert.Equal(new Point(0, 0), MainForm.ComputeCenteredLocation(new Size(4000, 3000), work));
-
-            // 工作区不在原点（多屏）时也要夹在它里面。
-            var second = new Rectangle(1920, 0, 1920, 1040);
-            var q = MainForm.ComputeCenteredLocation(new Size(1428, 1000), second);
-            Assert.True(
-                second.Contains(new Rectangle(q, new Size(1428, 1000))),
-                "多屏情况下也应完整落在该屏工作区内：" + q);
-            Assert.True(q.X >= second.Left, "不应跑到左边那块屏幕上：" + q);
-
-            // 比工作区更高（小屏/任务栏很高）：贴顶部，不能出现负 y。
-            Assert.Equal(second.Top, MainForm.ComputeCenteredLocation(new Size(1428, 1984), second).Y);
-        }
-
-        /// <summary>
-        /// 目标机缺陷回归：内容放得下时**不允许**出现纵向滚动条，且第一行必须完整可见。
-        /// 现场表现是"表格比可视区高 31px → 出滚动条 → 首行被 AutoScroll 滚出去、顶部被切"。
-        /// </summary>
-        [Fact]
-        public void RowsFit_ThenNoScrollbarAndFirstRowIsNotClipped()
-        {
-            var configPath = Path.Combine(_dir, "fit.json");
-            File.WriteAllText(configPath, BuildConfigJson(10));
-
-            var sawFitCase = false;
-            foreach (var size in new[] { new Size(740, 1000), new Size(697, 680), new Size(660, 620) })
-            {
-                Exception? failure = null;
-                var fit = false;
-                var thread = new Thread(() =>
-                {
-                    MakeThreadDpiAware();
-                    try
-                    {
-                        fit = AssertNoScrollbarAndFirstRowIntact(configPath, size);
-                    }
-                    catch (Exception ex)
-                    {
-                        failure = ex;
-                    }
-                });
-                thread.SetApartmentState(ApartmentState.STA);
-                thread.Start();
-                thread.Join();
-
-                Assert.True(failure == null, "窗口 " + size + " 下布局校验失败：" + failure);
-                sawFitCase |= fit;
-            }
-
-            Assert.True(sawFitCase, "至少要有一个尺寸能放下 10 行，否则这条测试没验到“放得下就不该有滚动条”。");
-        }
-
-        /// <summary>
-        /// 校验一个尺寸下的三点不变式：
-        /// 1) 首行完整可见、且没有滚动偏移（被 AutoScroll 滚出去时首行的 Top 会小于"内边距+行内间距"）；
-        /// 2) 内容放得下时**绝不**出现滚动条 —— 这正是目标机现场"表格比可视区高 31px → 出滚动条 → 首行被切"的对照；
-        /// 3) 内容确实装不下时（科目多/窗口矮）必须允许纵向滚动。
-        /// 返回值表示该尺寸下内容是否放得下。
-        /// </summary>
-        private static bool AssertNoScrollbarAndFirstRowIntact(string configPath, Size size)
-        {
-            using (var form = new MainForm(configPath))
-            {
-                form.Size = size;
-                form.CreateControl();
-                form.PerformLayout();
-
-                var table = GetPrivateField<TableLayoutPanel>(form, "_subjectTable");
-                var rows = table.Controls.Cast<Control>().ToList();
-                var rowSpace = rows.Sum(r => r.Height + r.Margin.Vertical);
-                var available = table.ClientSize.Height - table.Padding.Vertical;
-                var fits = rowSpace <= available;
-                var info = "行合计=" + rowSpace + " 可用=" + available + " 表client=" + table.ClientSize
-                           + " 行高=[" + string.Join(",", rows.Select(r => r.Height)) + "]";
-
-                // 与是否溢出无关：首行上沿 = 表格内边距 + 行内上间距，底部不越界，且滚动位置为 0。
-                Assert.Equal(table.Padding.Top + rows[0].Margin.Top, rows[0].Top);
-                Assert.True(rows[0].Bottom <= table.ClientSize.Height, "首行底部越界：" + info);
-                Assert.Equal(0, table.AutoScrollPosition.X);
-                Assert.Equal(0, table.AutoScrollPosition.Y);
-
-                if (fits)
-                {
-                    Assert.False(table.VerticalScroll.Visible, "内容放得下时不该出现纵向滚动条：" + info);
-                    Assert.False(table.HorizontalScroll.Visible, "不该出现横向滚动条：" + info);
-                }
-                else
-                {
-                    Assert.True(table.AutoScroll, "内容装不下时应允许纵向滚动：" + info);
-                }
-
-                return fits;
-            }
-        }
-
-        /// <summary>
-        /// 显示时的兜底：即便确实存在滚动范围（科目多、窗口矮），首次显示后也必须回到顶部，
-        /// 否则"第一个科目按钮拿到焦点 → AutoScroll 把它滚进视野"会把首行切掉。
-        /// </summary>
-        [Fact]
-        public void ResetSubjectScroll_BringsPanelBackToTop()
-        {
-            var configPath = Path.Combine(_dir, "many.json");
-            File.WriteAllText(configPath, BuildLongConfigJson(15));
-
-            Exception? failure = null;
-            var thread = new Thread(() =>
-            {
-                MakeThreadDpiAware();
-                try
-                {
-                    using (var form = new MainForm(configPath))
-                    {
-                        form.Size = new Size(660, 620);
-                        form.CreateControl();
-                        form.PerformLayout();
-
-                        var table = GetPrivateField<TableLayoutPanel>(form, "_subjectTable");
-                        Assert.True(table.VerticalScroll.Visible, "15 个科目在矮窗口下应当可以滚动。");
-
-                        // 真正滚动需要窗口句柄（未显示时 AutoScrollPosition 只是缓存标志，设了也不动）。
-                        form.Show();
-                        Application.DoEvents();
-
-                        table.AutoScrollPosition = new Point(0, 30);
-                        Assert.NotEqual(0, table.AutoScrollPosition.Y);
-
-                        InvokePrivate(form, "ResetSubjectScroll");
-
-                        Assert.Equal(0, table.AutoScrollPosition.Y);
-                        Assert.Equal(0, table.AutoScrollPosition.X);
-                        form.Hide();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    failure = ex;
-                }
-            });
-            thread.SetApartmentState(ApartmentState.STA);
-            thread.Start();
-            thread.Join();
-
-            Assert.True(failure == null, "滚动位置复位失败：" + failure);
-        }
-
-        /// <summary>科目名与远端路径都用“较长文本”，模拟真实配置（如 ftp.example.com · /pub/yuwen）。</summary>
+        /// <summary>科目名与远端路径都用"较长文本"，模拟真实配置（如 ftp.example.com · /pub/yuwen）。</summary>
         private static string BuildLongConfigJson(int count)
         {
             var config = new AppConfig { Version = 2 };
@@ -552,93 +426,234 @@ namespace FtpJumperLite.Tests
                         button.Text + " 超出窗体客户区：" + onForm + "，客户区 " + form.ClientRectangle);
                 }
 
-                // 2) 单列布局：10 个科目行都存在、高度一致（≤1px 差）且精确填满科目区。
-                var table = GetPrivateField<TableLayoutPanel>(form, "_subjectTable");
-                Assert.Equal(10, table.Controls.Count);
+                // 2) 科目区：10 行都在、行高为正、行不越界（放得下时全部落在可视区内）。
+                var list = GetList(form);
+                Assert.Equal(10, list.Subjects.Count);
+                Assert.True(list.RowHeightPx > 0, "科目行高应为正。");
 
-                var rowHeights = table.Controls.Cast<Control>().Select(c => c.Height).ToList();
-                Assert.True(
-                    rowHeights.Max() - rowHeights.Min() <= 1,
-                    "科目行高度不一致（最后一行被拉伸）：" + string.Join(", ", rowHeights));
-
-                var available = table.ClientSize.Height - table.Padding.Vertical;
-                var rowSpace = table.Controls.Cast<Control>().Sum(c => c.Height + c.Margin.Vertical);
-                if (rowSpace > available)
+                for (var i = 0; i < list.Subjects.Count; i++)
                 {
-                    // 一屏放不下（窗口很矮或科目很多）：行高固定为下限（64，行内再扣 8px 上下边距）并允许纵向滚动。
-                    Assert.True(table.AutoScroll, "科目区应允许纵向滚动。");
-                    Assert.True(
-                        rowSpace / 10 >= 64,
-                        "滚动时科目行不应被压扁：平均行占用高度 " + (rowSpace / 10));
-                }
-                else
-                {
-                    // 行高不再"填到 0 余量"：整列预留 RowSafetyLogical 个逻辑像素（200% 下为 4px），
-                    // 免得后续任何一次 1~2px 的收缩把内容顶得比可视区高 —— 那就会冒出滚动条并切掉首行。
-                    var reserve = MainForm.ScaleFor(MainForm.RowSafetyLogical, form.DpiScale);
-                    Assert.True(
-                        available - rowSpace <= reserve + 1,
-                        "科目行未按预期填满：行占用高度合计 " + rowSpace + "，可用高度 " + available
-                        + "，安全余量 " + reserve);
-                }
-
-                foreach (var row in table.Controls.Cast<Control>())
-                {
-                    var rowBounds = row.Bounds;
-                    Assert.True(rowBounds.Right <= table.ClientSize.Width, "科目行右侧越界：" + rowBounds);
-                    if (rowSpace <= available)
+                    var bounds = list.GetRowBounds(i);
+                    Assert.True(bounds.Right <= list.ClientSize.Width, "科目行右侧越界：" + bounds);
+                    if (list.MaxScrollPx == 0)
                     {
-                        // 不滚动时所有行都应在可视区内；滚动时后面的行本来就在可视区之外。
-                        Assert.True(rowBounds.Bottom <= table.ClientSize.Height, "科目行底部越界：" + rowBounds);
+                        Assert.True(bounds.Bottom <= list.ClientSize.Height, "科目行底部越界：" + bounds);
                     }
                 }
-
-                // 3) 科目名必须水平+垂直居中，且两行文本完整落在按钮内（不被裁切）。
-                foreach (var row in table.Controls.Cast<Control>())
-                {
-                    var button = Assert.IsType<Button>(row);
-                    Assert.Equal(ContentAlignment.MiddleCenter, button.TextAlign);
-
-                    // 逐行量测真实文本宽度：带 HorizontalCenter 的 MeasureText 会把文本撑满整幅宽度，
-                    // 不能直接用来判断“块是否居中”（用 int.MaxValue 作宽度上限在 GDI 里也会退化成整幅宽度）。
-                    var probe = new Size(10000, 10000);
-                    var lineWidths = button.Text
-                        .Split(new[] { "\r\n" }, StringSplitOptions.None)
-                        .Select(line => TextRenderer.MeasureText(
-                            line,
-                            button.Font,
-                            probe,
-                            TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Width)
-                        .ToList();
-                    var blockWidth = lineWidths.Max();
-
-                    // 居中判定：左右（以及上下）留白必须相等。
-                    // 注意 TextAlign=MiddleCenter 只是设定，这里按实际可用区域算出应有的留白来校验。
-                    var hPad = button.ClientSize.Width - blockWidth;
-                    Assert.True(
-                        hPad >= 0,
-                        "科目名超出按钮宽度：文本块 " + blockWidth + " > 按钮 " + button.ClientSize.Width);
-
-                    var pad = button.Padding;
-                    var boxHeight = button.ClientSize.Height - pad.Vertical;
-                    var wrapped = TextRenderer.MeasureText(
-                        button.Text,
-                        button.Font,
-                        new Size(Math.Max(1, hPad / 2 + blockWidth), 10000),
-                        TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
-
-                    Assert.True(
-                        wrapped.Height <= boxHeight,
-                        "科目名被纵向裁切：文本高 " + wrapped.Height + " 超过可用高 " + boxHeight
-                        + "（按钮 " + button.ClientSize + "，字号 " + button.Font.Size + "）");
-                }
             }
+        }
+
+        /// <summary>
+        /// 窗口落位（纯函数）：目标机现场是 200% 下默认窗口 1428x1984 落在屏幕左上角、
+        /// 下沿压住任务栏；这里把"工作区内居中 + 绝不越界"钉死。
+        /// </summary>
+        [Fact]
+        public void ComputeCenteredLocation_CentersAndStaysInsideWorkArea()
+        {
+            var work = new Rectangle(0, 0, 3840, 2064);   // 4K@200% 的工作区（任务栏 96px）
+            var size = new Size(1428, 1984);
+            var p = MainForm.ComputeCenteredLocation(size, work);
+
+            Assert.Equal(new Point(1206, 40), p);
+            Assert.True(work.Contains(new Rectangle(p, size)), "窗口应完整落在工作区内：" + p);
+
+            // 比工作区还大：贴左上角，绝不出现负坐标（负坐标会跑到屏幕外或压住任务栏）。
+            Assert.Equal(new Point(0, 0), MainForm.ComputeCenteredLocation(new Size(4000, 3000), work));
+
+            // 工作区不在原点（多屏）时也要夹在它里面。
+            var second = new Rectangle(1920, 0, 1920, 1040);
+            var q = MainForm.ComputeCenteredLocation(new Size(1428, 1000), second);
+            Assert.True(
+                second.Contains(new Rectangle(q, new Size(1428, 1000))),
+                "多屏情况下也应完整落在该屏工作区内：" + q);
+            Assert.True(q.X >= second.Left, "不应跑到左边那块屏幕上：" + q);
+
+            // 比工作区更高（小屏/任务栏很高）：贴顶部，不能出现负 y。
+            Assert.Equal(second.Top, MainForm.ComputeCenteredLocation(new Size(1428, 1984), second).Y);
+        }
+
+        /// <summary>
+        /// 目标机缺陷回归：内容放得下时**不允许**出现滚动范围，且第一行必须完整可见。
+        /// 现场表现是"表格比可视区高 31px → 出滚动条 → 首行被 AutoScroll 滚出去、顶部被切"。
+        /// </summary>
+        [Fact]
+        public void RowsFit_ThenNoScrollbarAndFirstRowIsNotClipped()
+        {
+            var configPath = Path.Combine(_dir, "fit.json");
+            File.WriteAllText(configPath, BuildConfigJson(10));
+
+            var sawFitCase = false;
+            foreach (var size in new[] { new Size(740, 1000), new Size(697, 680), new Size(660, 620) })
+            {
+                Exception? failure = null;
+                var fit = false;
+                var thread = new Thread(() =>
+                {
+                    MakeThreadDpiAware();
+                    try
+                    {
+                        fit = AssertNoScrollAndFirstRowIntact(configPath, size);
+                    }
+                    catch (Exception ex)
+                    {
+                        failure = ex;
+                    }
+                });
+                thread.SetApartmentState(ApartmentState.STA);
+                thread.Start();
+                thread.Join();
+
+                Assert.True(failure == null, "窗口 " + size + " 下布局校验失败：" + failure);
+                sawFitCase |= fit;
+            }
+
+            Assert.True(sawFitCase, "至少要有一个尺寸能放下 10 行，否则这条测试没验到“放得下就不该有滚动条”。");
+        }
+
+        /// <summary>
+        /// 返回值表示该尺寸下内容是否放得下。与是否溢出无关的硬约束：首行完整、滚动位置为 0。
+        /// </summary>
+        private static bool AssertNoScrollAndFirstRowIntact(string configPath, Size size)
+        {
+            using (var form = new MainForm(configPath))
+            {
+                form.Size = size;
+                form.CreateControl();
+                form.PerformLayout();
+
+                var list = GetList(form);
+                var dpi = list.DpiScale;
+                var padTop = MainForm.ScaleFor(list.Metrics.PadTopLogical, dpi);
+                var padBottom = MainForm.ScaleFor(list.Metrics.PadBottomLogical, dpi);
+                var avail = list.ClientSize.Height - padTop - padBottom;
+                var fits = list.ContentHeightPx <= avail;
+                var info = "内容高=" + list.ContentHeightPx + " 可用=" + avail
+                           + " 行高=" + list.RowHeightPx + " 可滚动=" + list.MaxScrollPx;
+
+                Assert.True(list.GetRowBounds(0).Bottom <= list.ClientSize.Height, "首行底部越界：" + info);
+                Assert.Equal(0, list.ScrollOffsetPx);
+
+                if (fits)
+                {
+                    Assert.Equal(0, list.MaxScrollPx);
+                    Assert.Equal(padTop, list.GetRowBounds(0).Top);
+                }
+
+                return fits;
+            }
+        }
+
+        /// <summary>
+        /// 科目区的滚动与命中测试：科目多于可见行时能滚、能滚到底、能回顶；
+        /// 键盘"当前行"会把自己滚进可视区并夹在有效范围内。
+        /// </summary>
+        [Fact]
+        public void SubjectList_Scrolls_HitTests_AndClampsCurrentRow()
+        {
+            var configPath = Path.Combine(_dir, "many.json");
+            File.WriteAllText(configPath, BuildLongConfigJson(15));
+
+            Exception? failure = null;
+            var thread = new Thread(() =>
+            {
+                MakeThreadDpiAware();
+                try
+                {
+                    using (var form = new MainForm(configPath))
+                    {
+                        form.Size = new Size(660, 620);
+                        form.CreateControl();
+                        form.PerformLayout();
+
+                        var list = GetList(form);
+                        Assert.Equal(15, list.Subjects.Count);
+                        Assert.True(list.MaxScrollPx > 0, "15 个科目在矮窗口下应当可以滚动。");
+                        Assert.Equal(0, list.ScrollOffsetPx);
+
+                        // 命中测试：第一行中心命中第 0 行；右侧内边距区域不算命中
+                        var first = list.GetRowBounds(0);
+                        Assert.Equal(0, list.GetRowIndexAt(new Point(first.Left + 5, first.Top + (first.Height / 2))));
+                        Assert.Equal(-1, list.GetRowIndexAt(new Point(list.ClientSize.Width - 1, first.Top + 1)));
+
+                        // 滚到底：偏移正好等于 MaxScrollPx，最后一行完整可见
+                        list.ScrollBy(100000);
+                        Assert.Equal(list.MaxScrollPx, list.ScrollOffsetPx);
+                        Assert.True(list.GetRowBounds(14).Bottom <= list.ClientSize.Height, "最后一行应完整可见。");
+
+                        // 回顶：偏移归零、首行回到内边距位置
+                        list.ScrollToTop();
+                        Assert.Equal(0, list.ScrollOffsetPx);
+                        Assert.Equal(MainForm.ScaleFor(list.Metrics.PadTopLogical, list.DpiScale), list.GetRowBounds(0).Top);
+
+                        // 当前行会自己滚进可视区，并夹在 [0, 行数-1]
+                        list.CurrentRowIndex = 12;
+                        Assert.Equal(12, list.CurrentRowIndex);
+                        Assert.True(list.ScrollOffsetPx > 0, "把第 13 行设为当前行后应当自动滚动。");
+
+                        list.CurrentRowIndex = 999;
+                        Assert.Equal(14, list.CurrentRowIndex);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            thread.Join();
+
+            Assert.True(failure == null, "科目区滚动/命中测试失败：" + failure);
+        }
+
+        /// <summary>空科目列表：布局安全、无滚动、命中测试返回 -1（不抛异常）。</summary>
+        [Fact]
+        public void EmptySubjects_LayoutIsSafe()
+        {
+            var configPath = Path.Combine(_dir, "empty.json");
+            File.WriteAllText(configPath, JsonConvert.SerializeObject(new AppConfig { Version = 2 }, Formatting.Indented));
+
+            Exception? failure = null;
+            var thread = new Thread(() =>
+            {
+                MakeThreadDpiAware();
+                try
+                {
+                    using (var form = new MainForm(configPath))
+                    {
+                        form.Size = new Size(660, 620);
+                        form.CreateControl();
+                        form.PerformLayout();
+
+                        var list = GetList(form);
+                        Assert.Empty(list.Subjects);
+                        Assert.Equal(0, list.RowHeightPx);
+                        Assert.Equal(0, list.ContentHeightPx);
+                        Assert.Equal(0, list.MaxScrollPx);
+                        Assert.Equal(-1, list.GetRowIndexAt(new Point(10, 10)));
+                        Assert.Equal(-1, list.CurrentRowIndex);
+
+                        list.ScrollToTop();
+                        list.ScrollBy(100);
+                        Assert.Equal(0, list.ScrollOffsetPx);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            thread.Join();
+
+            Assert.True(failure == null, "空科目列表布局失败：" + failure);
         }
 
         [Fact]
         public void AppIcon_LoadsLargeFrameFromBuiltExe()
         {
-            // 测试输出目录里就有被测 exe（由 csproj 的 ApplicationIcon 嵌入了 Report.ico）。
+            // 测试输出目录里就有被测 exe（由 csproj 的 ApplicationIcon 嵌入了 Report1.ico）。
             var exe = Path.Combine(AppContext.BaseDirectory, "FtpJumperLite.exe");
             Assert.True(File.Exists(exe), "测试输出目录里应有被测 exe：" + exe);
 
@@ -730,11 +745,9 @@ namespace FtpJumperLite.Tests
             return null;
         }
 
-        private static void InvokePrivate(object instance, string methodName)
+        private static SubjectListControl GetList(MainForm form)
         {
-            var method = instance.GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.NotNull(method);
-            method!.Invoke(instance, null);
+            return GetPrivateField<SubjectListControl>(form, "_subjectList");
         }
 
         private static T GetPrivateField<T>(object instance, string fieldName)

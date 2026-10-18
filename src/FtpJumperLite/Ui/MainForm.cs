@@ -10,15 +10,16 @@ using FtpJumperLite.Services;
 namespace FtpJumperLite.Ui
 {
     /// <summary>
-    /// 主窗体：科目选择界面（单列列表，默认正好 10 行，投影友好）。
+    /// 主窗体：科目选择界面（单列卡片列表，默认正好 10 行，投影友好）。
     /// 单击科目 = 拼 ftp:// 网址交给文件资源管理器打开；界面本身不提供科目增删改（由教师手工编辑 subjects.json）。
     ///
     /// 布局三条硬约束（都是为了高 DPI，尤其 2K@200%）：
     /// 1) 所有尺寸常量都是 <b>96 DPI 逻辑像素</b>，用前一律经 <see cref="Scale"/> 换算；
-    ///    字号是“点”（随 DPI 自动放大），常量若不同步放大，就会出现“行高小于文字所需高度”。
-    /// 2) 行高永远不小于“最小字号下两行文本 + 内边距 + 行间距”所需的高度（内容下限），
-    ///    否则 TableLayoutPanel 会自行重排：把多余空间塞给最后一行（表现为最后一个按钮被撑开）。
-    /// 3) 科目表末尾**永远**保留一个吸收行，滚不动时由它吃掉剩余像素，绝不让某个科目行被拉伸。
+    ///    字号是"点"（随 DPI 自动放大），常量若不同步放大，就会出现"行高小于文字所需高度"。
+    /// 2) 行高由可见高度平分，夹在 [MinRowHeight, MaxRowHeight] 之间，且**永远不小于**内容下限
+    ///    （最小字号两行文本 + 卡片内边距 + 安全余量），否则文字会被裁。
+    /// 3) 科目区是自绘控件（<see cref="SubjectListControl"/>），滚动条也由它自己按像素判断，
+    ///    不再依赖 WinForms 的 AutoScroll —— 从根上消除"内容放得下却冒出滚动条、首行被滚走"那类反馈环。
     /// </summary>
     public sealed class MainForm : Form
     {
@@ -37,7 +38,7 @@ namespace FtpJumperLite.Ui
         private const int TablePadLeftLogical = 14;
         private const int TablePadTopLogical = 12;
         private const int TablePadRightLogical = 14;
-        private const int TablePadBottomLogical = 8;
+        private const int TablePadBottomLogical = 12;
         private const int BottomPadLeftLogical = 12;
         private const int BottomPadTopLogical = 8;
         private const int BottomPadRightLogical = 12;
@@ -46,54 +47,34 @@ namespace FtpJumperLite.Ui
         private const int DefaultFormSideMarginLogical = 80;
         private const int DefaultFormMinWidthLogical = 430;
         private const int DefaultFormMaxWidthLogical = 760;
-        private const float MinSubjectNameFontSize = 12F;
-        private const float MaxSubjectNameFontSize = 17F;
+        public const float MinSubjectNameFontSize = 12F;
+        public const float MaxSubjectNameFontSize = 17F;
 
-        /// <summary>Button 默认 Padding=3，文字区比按钮本身窄/矮 6px。</summary>
+        /// <summary>Button 默认 Padding=3，文字区比按钮本身窄/矮 6px（也是字号拟合的默认预留）。</summary>
         private const int ButtonPadding = 6;
-
-        /// <summary>
-        /// 字号拟合时预留的安全余量（逻辑像素）：主题按钮的文字区除 Padding 外还有一点内缩，
-        /// 若按“测得高度 == 可用高度”卡边界，第二行会被裁掉。留一点余量最稳。
-        /// </summary>
-        private const int TextSafetyLogical = 8;
-
-        /// <summary>
-        /// 行高安全余量（逻辑像素）：宁可让整列少占两像素，也不让行高"刚好等于"可用高度。
-        /// 余量一旦为 0，后续任何一次 1~2px 的收缩（滚动条显隐、状态栏自适应高度、拖动窗口边缘）
-        /// 都会立刻挤出纵向滚动条，并把第一行顶出可视区 —— 现场那根 31px 滚动条就是这么来的。
-        /// </summary>
-        public const int RowSafetyLogical = 2;
-
-        /// <summary>行高重算的最大轮数：自身改动会再次触发布局，需要收敛，但不能死循环。</summary>
-        private const int MaxRowLayoutPasses = 4;
 
         private readonly string _configPath;
         private readonly ConfigStore _configStore;
         private readonly TableLayoutPanel _root;
         private readonly TableLayoutPanel _bottom;
-        private readonly TableLayoutPanel _subjectTable;
-        private readonly Button _btnRefresh;
-        private readonly Button _btnOpenConfig;
-        private readonly Button _btnQuit;
+        private readonly SubjectListControl _subjectList;
+        private readonly Win11Button _btnRefresh;
+        private readonly Win11Button _btnOpenConfig;
+        private readonly Win11Button _btnQuit;
         private readonly ToolStripStatusLabel _statusLabel;
-        private readonly ToolTip _toolTip = new ToolTip();
-        private readonly List<Button> _subjectRows = new List<Button>();
+        private UiPalette _palette = UiPalette.Light();
         private List<Subject> _subjects = new List<Subject>();
-        private RowStyle? _spacerRowStyle;
         private float _dpiScale = 1F;
+
         /// <summary>构造函数是否已跑完；在此之前任何字段都可能还是 null，禁止按 DPI 缩放。</summary>
         private bool _layoutReady;
-        private bool _inRowLayout;
-        /// <summary>本轮回算期间又有新的布局请求进来（说明表格尺寸变了），需要再算一遍。</summary>
-        private bool _rowLayoutDirty;
 
         public MainForm(string? configPath)
         {
             _configPath = string.IsNullOrWhiteSpace(configPath) ? ConfigStore.DefaultConfigPath : configPath!;
             _configStore = new ConfigStore(_configPath);
 
-            // 自己按 DPI 缩放全部尺寸，禁用 WinForms 的字体自动缩放，避免“双重缩放 / 尺寸不可预期”。
+            // 自己按 DPI 缩放全部尺寸，禁用 WinForms 的字体自动缩放，避免"双重缩放 / 尺寸不可预期"。
             AutoScaleMode = AutoScaleMode.None;
             _dpiScale = CurrentDpiScale();
 
@@ -108,7 +89,7 @@ namespace FtpJumperLite.Ui
             }
 
             // 默认尺寸：单列刚好放下 10 个科目，并尽量占满屏幕可用高度。
-            // workArea 已经是当前 DPI 下的像素，只有“下限/上限”这类常量需要 Scale。
+            // workArea 已经是当前 DPI 下的像素，只有"下限/上限"这类常量需要 Scale。
             var workArea = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 800);
             var defaultHeight = Math.Max(Scale(MinFormHeightLogical), workArea.Height - Scale(DefaultFormMarginLogical));
             var defaultWidth = (int)Math.Round(defaultHeight * 0.72);
@@ -119,36 +100,22 @@ namespace FtpJumperLite.Ui
             MinimumSize = new Size(Scale(MinFormWidthLogical), Scale(MinFormHeightLogical));
 
             _root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
-            // 列必须固定占满整宽：不设 ColumnStyle 时列会按内容 AutoSize，
-            // 结果是被科目按钮的文字撑得比窗口还宽，整行向右溢出、左右留白不再对称。
+            // 列必须固定占满整宽，否则列会按内容 AutoSize、把整行撑得比窗口还宽。
             _root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             _root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             _root.RowStyles.Add(new RowStyle(SizeType.Absolute, Scale(BottomBarHeightLogical)));
             _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-            _subjectTable = new TableLayoutPanel
+            _subjectList = new SubjectListControl
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 1,
-                AutoScroll = true,
-                Padding = new Padding(
-                    Scale(TablePadLeftLogical),
-                    Scale(TablePadTopLogical),
-                    Scale(TablePadRightLogical),
-                    Scale(TablePadBottomLogical)),
-                BackColor = SystemColors.Control
+                DpiScale = _dpiScale,
+                Metrics = CreateRowMetrics(),
+                Palette = _palette,
+                TooltipProvider = BuildTooltip
             };
-            // 列固定占满整宽：不设 ColumnStyle 时列按内容 AutoSize，文字一长就会把列撑得比表格还宽，
-            // 结果是整行偏左、右侧留白被吃掉（高 DPI 下文字变宽时尤其明显）。
-            _subjectTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            // 文本已按像素宽度截断，横向永远不需要滚动。
-            _subjectTable.HorizontalScroll.Enabled = false;
-            _subjectTable.Resize += (_, _) => ApplyRowLayout();
-            _subjectTable.Layout += (_, _) => ApplyRowLayout();
-            // 滚动条显隐只改客户区尺寸、不一定触发 Resize：漏掉它就会"行高按旧高度算、永远不再重算"。
-            _subjectTable.ClientSizeChanged += (_, _) => ApplyRowLayout();
-            _root.Controls.Add(_subjectTable, 0, 0);
+            _subjectList.SubjectActivated += (_, e) => OpenSubject(e.Subject);
+            _root.Controls.Add(_subjectList, 0, 0);
 
             _btnRefresh = MakeBottomButton("刷新配置", (_, _) => ReloadSubjects());
             _btnOpenConfig = MakeBottomButton("打开配置目录", OpenConfigDirectory);
@@ -160,6 +127,7 @@ namespace FtpJumperLite.Ui
                 Dock = DockStyle.Fill,
                 ColumnCount = 4,
                 RowCount = 1,
+                BackColor = _palette.FormBack,
                 Padding = new Padding(
                     Scale(BottomPadLeftLogical),
                     Scale(BottomPadTopLogical),
@@ -175,12 +143,19 @@ namespace FtpJumperLite.Ui
             _bottom.Controls.Add(_btnQuit, 3, 0);
             _root.Controls.Add(_bottom, 0, 1);
 
-            var statusStrip = new StatusStrip();
+            var statusStrip = new StatusStrip
+            {
+                BackColor = _palette.FormBack,
+                ForeColor = _palette.SubText,
+                SizingGrip = false,
+                RenderMode = ToolStripRenderMode.System
+            };
             _statusLabel = new ToolStripStatusLabel { Spring = false };
             statusStrip.Items.Add(_statusLabel);
             _root.Controls.Add(statusStrip, 0, 2);
 
             Controls.Add(_root);
+            BackColor = _palette.FormBack;
 
             _statusLabel.Text = "就绪：单击科目 = 直接打开该科目的 FTP 网址；修改配置后请点「刷新配置」。";
             ReloadSubjects();
@@ -194,6 +169,18 @@ namespace FtpJumperLite.Ui
         /// <summary>当前 DPI 相对 96 的倍数（1.0 = 100%，2.0 = 200%）。</summary>
         public float DpiScale => _dpiScale;
 
+        /// <summary>方案配色（阶段二固定为 Win11 浅色；阶段四由主题接管）。</summary>
+        public UiPalette Palette
+        {
+            get => _palette;
+            set
+            {
+                _palette = value ?? UiPalette.Light();
+                BackColor = _palette.FormBack;
+                _subjectList.Palette = _palette;
+            }
+        }
+
         /// <summary>把 96 DPI 逻辑像素换算成当前 DPI 的像素。</summary>
         public static int ScaleFor(int logicalPixels, float dpiScale)
         {
@@ -206,6 +193,24 @@ namespace FtpJumperLite.Ui
         }
 
         private int Scale(int logicalPixels) => ScaleFor(logicalPixels, _dpiScale);
+
+        /// <summary>把窗体常量装进科目区的度量对象（阶段三调档位只改这里）。</summary>
+        private RowMetrics CreateRowMetrics()
+        {
+            return new RowMetrics
+            {
+                MinRowHeightLogical = MinRowHeightLogical,
+                MaxRowHeightLogical = MaxRowHeightLogical,
+                DefaultRowHeightLogical = DefaultRowHeightLogical,
+                MaxVisibleRows = MaxVisibleRows,
+                RowGapLogical = RowMarginLogical,
+                PadLeftLogical = TablePadLeftLogical,
+                PadRightLogical = TablePadRightLogical,
+                PadTopLogical = TablePadTopLogical,
+                PadBottomLogical = TablePadBottomLogical,
+                FontScale = 1F
+            };
+        }
 
         private float CurrentDpiScale()
         {
@@ -227,7 +232,7 @@ namespace FtpJumperLite.Ui
 
             // 2) 兜底：直接问窗口/设备上下文的真实 DPI。
             //    没有 app.config 声明时 WinForms 会固定返回 96，而 GDI 仍按真实 DPI 画字，
-            //    这里必须把真实 DPI 拿回来，否则 175%/200% 下“字号变大、行高不变”，布局必然错乱。
+            //    这里必须把真实 DPI 拿回来，否则 175%/200% 下"字号变大、行高不变"，布局必然错乱。
             if (dpi <= 96F)
             {
                 var real = RealDpi();
@@ -302,15 +307,16 @@ namespace FtpJumperLite.Ui
         {
             base.OnShown(e);
 
-            // 窗口首次显示时，第一个科目按钮会拿到焦点，WinForms 的 AutoScroll 会把它"滚进视野"，
-            // 面板被滚到最大值 → 第一行顶部被切掉。这里统一把滚动位置复位到左上角。
-            ResetSubjectScroll();
+            // 科目区的滚动位置本来就该是 0（内容放得下时没有滚动范围）。
+            _subjectList.ScrollToTop();
 
-            // 现场排障用：把最终落位与滚动状态写进日志（目标机上一条即可判定）。
+            // 现场排障用：把最终落位与行高写进日志（目标机上一条即可判定）。
             AppLogger.Info("窗口已显示：Bounds=" + Bounds
-                           + " 科目区=" + _subjectTable.ClientSize
-                           + " 滚动条=" + _subjectTable.VerticalScroll.Visible
-                           + " 滚动偏移=" + _subjectTable.AutoScrollPosition);
+                           + " 科目区=" + _subjectList.ClientSize
+                           + " 行高=" + _subjectList.RowHeightPx
+                           + " 内容高=" + _subjectList.ContentHeightPx
+                           + " 可滚动=" + _subjectList.MaxScrollPx
+                           + " 滚动偏移=" + _subjectList.ScrollOffsetPx);
         }
 
         /// <summary>把窗口在<b>主屏工作区</b>内居中摆放，并保证整个窗口不越出工作区（含任务栏区域）。</summary>
@@ -345,16 +351,6 @@ namespace FtpJumperLite.Ui
             return new Point(x, y);
         }
 
-        /// <summary>把科目区滚动位置复位到左上角（内容放得下时它本来就该是 0）。</summary>
-        private void ResetSubjectScroll()
-        {
-            var current = _subjectTable.AutoScrollPosition;
-            if (current.X != 0 || current.Y != 0)
-            {
-                _subjectTable.AutoScrollPosition = new Point(0, 0);
-            }
-        }
-
         protected override void OnDpiChangedAfterParent(EventArgs e)
         {
             base.OnDpiChangedAfterParent(e);
@@ -381,7 +377,7 @@ namespace FtpJumperLite.Ui
 
             var scale = CurrentDpiScale();
             AppLogger.Info("DPI：scale=" + scale + " DeviceDpi=" + DeviceDpi
-                           + " 窗口=" + Size + " 表格=" + _subjectTable.ClientSize);
+                           + " 窗口=" + Size + " 科目区=" + _subjectList.ClientSize);
             if (Math.Abs(scale - _dpiScale) <= 0.01F)
             {
                 return;
@@ -395,11 +391,6 @@ namespace FtpJumperLite.Ui
         private void ApplyDpiScaling()
         {
             _root.RowStyles[1].Height = Scale(BottomBarHeightLogical);
-            _subjectTable.Padding = new Padding(
-                Scale(TablePadLeftLogical),
-                Scale(TablePadTopLogical),
-                Scale(TablePadRightLogical),
-                Scale(TablePadBottomLogical));
             _bottom.Padding = new Padding(
                 Scale(BottomPadLeftLogical),
                 Scale(BottomPadTopLogical),
@@ -409,22 +400,28 @@ namespace FtpJumperLite.Ui
             {
                 button.MinimumSize = new Size(Scale(ButtonMinWidthLogical), Scale(ButtonMinHeightLogical));
                 button.Margin = new Padding(Scale(RowMarginLogical), 0, 0, 0);
+                button.DpiScale = _dpiScale;
             }
 
             MinimumSize = new Size(Scale(MinFormWidthLogical), Scale(MinFormHeightLogical));
-            RebuildSubjectGrid();
+
+            // 科目区自己按 DPI 重算行高/字号/卡片尺寸（先给 Metrics 再给 DpiScale，避免算两遍）。
+            _subjectList.Metrics = CreateRowMetrics();
+            _subjectList.DpiScale = _dpiScale;
         }
 
-        private Button MakeBottomButton(string text, EventHandler onClick)
+        private Win11Button MakeBottomButton(string text, EventHandler onClick)
         {
-            var b = new Button
+            var b = new Win11Button
             {
                 Text = text,
                 AutoSize = true,
                 AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 MinimumSize = new Size(Scale(ButtonMinWidthLogical), Scale(ButtonMinHeightLogical)),
                 Margin = new Padding(Scale(RowMarginLogical), 0, 0, 0),
-                Font = new Font("Microsoft YaHei UI", 12F)
+                Font = new Font("Microsoft YaHei UI", 12F),
+                Palette = _palette,
+                DpiScale = _dpiScale
             };
             b.Click += onClick;
             return b;
@@ -437,7 +434,7 @@ namespace FtpJumperLite.Ui
             if (!_configStore.TryLoad(out var config, out var error))
             {
                 _subjects = new List<Subject>();
-                RebuildSubjectGrid();
+                BindSubjects();
                 MessageBox.Show(
                     this,
                     error,
@@ -448,146 +445,15 @@ namespace FtpJumperLite.Ui
             }
 
             _subjects = config!.Subjects;
-            RebuildSubjectGrid();
+            BindSubjects();
             AppLogger.Info("已刷新配置，科目数：" + _subjects.Count);
         }
 
-        private void RebuildSubjectGrid()
+        /// <summary>把当前科目喂给自绘列表（列表自己算行高，不需要重建控件）。</summary>
+        private void BindSubjects()
         {
-            _subjectTable.SuspendLayout();
-            _subjectTable.Controls.Clear();
-            _subjectTable.RowStyles.Clear();
-            _subjectRows.Clear();
-            _spacerRowStyle = null;
-            _rowLayoutDirty = false;
-
-            if (_subjects.Count == 0)
-            {
-                _subjectTable.RowCount = 1;
-                _subjectTable.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-                _subjectTable.Controls.Add(CreateHintLabel(), 0, 0);
-            }
-            else
-            {
-                // 末尾**永远**留一个吸收行：即使科目超过一屏（滚动）也留着，
-                // 这样“剩余像素”只会进吸收行，绝不会把最后一个科目行撑开。
-                _subjectTable.RowCount = _subjects.Count + 1;
-
-                var height = ComputeRowHeightPx(
-                    _subjectTable.ClientSize.Height - _subjectTable.Padding.Vertical,
-                    _subjects.Count,
-                    _dpiScale,
-                    ComputeContentFloorPx());
-
-                for (var i = 0; i < _subjects.Count; i++)
-                {
-                    _subjectTable.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
-                }
-
-                _spacerRowStyle = new RowStyle(SizeType.Absolute, 0F);
-                _subjectTable.RowStyles.Add(_spacerRowStyle);
-
-                for (var i = 0; i < _subjects.Count; i++)
-                {
-                    var row = CreateSubjectButton(_subjects[i], height);
-                    _subjectRows.Add(row);
-                    _subjectTable.Controls.Add(row, 0, i);
-                }
-            }
-
-            _subjectTable.ResumeLayout();
-            ApplyRowLayout();
+            _subjectList.Subjects = _subjects;
             SetInteractionEnabled(true);
-        }
-
-        private Label CreateHintLabel()
-        {
-            return new Label
-            {
-                Text = "尚未加载到任何科目。\r\n\r\n请点击下方「打开配置目录」，"
-                       + "用记事本编辑 subjects.json（参考随附示例）。\r\n保存后点击「刷新配置」。",
-                Dock = DockStyle.Fill,
-                Font = new Font("Microsoft YaHei UI", 13F),
-                ForeColor = Color.DimGray
-            };
-        }
-
-        // ---------- 科目行 ----------
-
-        /// <summary>
-        /// 科目行：系统按钮外观，两行文本（科目名 + 主机·远端路径），整体在按钮内**水平与垂直居中**
-        /// （TextAlign = MiddleCenter）。
-        /// </summary>
-        private Button CreateSubjectButton(Subject subject, int rowHeight)
-        {
-            var margin = Scale(RowMarginLogical);
-            var buttonHeight = Math.Max(0, rowHeight - margin);
-
-            var button = new Button
-            {
-                Dock = DockStyle.Fill,
-                Margin = new Padding(0, margin / 2, 0, margin / 2),
-                TextAlign = ContentAlignment.MiddleCenter,
-                UseMnemonic = false,
-                Cursor = Cursors.Hand
-            };
-
-            ApplyRowTextAndFont(button, subject, buttonHeight);
-
-            _toolTip.SetToolTip(button, BuildTooltip(subject));
-            button.Click += (_, _) => OpenSubject(subject);
-            return button;
-        }
-
-        /// <summary>
-        /// 给按钮设置“两行文本 + 与之匹配的字号”：
-        /// 每行先按**像素宽度**截断（超出视宽就加省略号），保证文本永不换行、永不超出按钮宽度
-        /// ——否则按钮的“首选宽度”会超过视口，表格底部就会冒出横向滚动条；
-        /// 再从大到小挑一个能把两行放下的字号。
-        /// </summary>
-        private void ApplyRowTextAndFont(Button button, Subject subject, int buttonHeight)
-        {
-            var maxWidth = AvailableRowWidth();
-            // 预留安全余量：主题按钮的文字区在 Padding 之外还有一点内缩，卡边界会把第二行裁掉。
-            var maxTextHeight = Math.Max(1, buttonHeight - ButtonPadding - Scale(TextSafetyLogical));
-
-            for (var size = MaxSubjectNameFontSize; size > MinSubjectNameFontSize; size -= 0.5F)
-            {
-                using (var probe = new Font("Microsoft YaHei UI", size, FontStyle.Bold))
-                {
-                    var text = Ellipsize(subject.Name, probe, maxWidth)
-                               + "\r\n"
-                               + Ellipsize(subject.DisplayLine, probe, maxWidth);
-
-                    if (MeasureTwoLineHeight(text, size, maxWidth) <= maxTextHeight)
-                    {
-                        SetRowText(button, text, size);
-                        return;
-                    }
-                }
-            }
-
-            using (var fallback = new Font("Microsoft YaHei UI", MinSubjectNameFontSize, FontStyle.Bold))
-            {
-                var text = Ellipsize(subject.Name, fallback, maxWidth)
-                           + "\r\n"
-                           + Ellipsize(subject.DisplayLine, fallback, maxWidth);
-                SetRowText(button, text, MinSubjectNameFontSize);
-            }
-        }
-
-        private static void SetRowText(Button button, string text, float fontSize)
-        {
-            button.Text = text;
-            if (Math.Abs(button.Font.Size - fontSize) > 0.01F)
-            {
-                var old = button.Font;
-                button.Font = new Font("Microsoft YaHei UI", fontSize, FontStyle.Bold);
-                if (old != null && !ReferenceEquals(old, Control.DefaultFont))
-                {
-                    old.Dispose();
-                }
-            }
         }
 
         /// <summary>把一行文字按像素宽度截断（必要时加省略号），保证它一定能放进 maxWidth。</summary>
@@ -625,54 +491,10 @@ namespace FtpJumperLite.Ui
             return low <= 0 ? Ellipsis : text.Substring(0, low) + Ellipsis;
         }
 
-        /// <summary>行的可用文字宽度（扣掉表格内边距、可能的滚动条与按钮内边距）。</summary>
-        private int AvailableRowWidth()
-        {
-            var width = _subjectTable.ClientSize.Width - _subjectTable.Padding.Horizontal;
-            if (width <= 0)
-            {
-                width = ClientSize.Width - _subjectTable.Padding.Horizontal;
-            }
-
-            if (_subjectTable.VerticalScroll.Visible)
-            {
-                width -= SystemInformation.VerticalScrollBarWidth;
-            }
-
-            return Math.Max(1, width - ButtonPadding);
-        }
-
         /// <summary>
-        /// 内容下限：所有科目里“最小字号下两行文本”最高的那个所需高度，加上按钮内边距、安全余量与行间距。
-        /// 行高一旦低于它，TableLayoutPanel 就会自己重排并把空间塞给最后一行（高 DPI 下的典型症状）。
-        /// </summary>
-        private int ComputeContentFloorPx()
-        {
-            if (_subjects.Count == 0)
-            {
-                return Scale(MinRowHeightLogical);
-            }
-
-            var width = AvailableRowWidth();
-            var worst = 0;
-            using (var font = new Font("Microsoft YaHei UI", MinSubjectNameFontSize, FontStyle.Bold))
-            {
-                foreach (var subject in _subjects)
-                {
-                    var text = Ellipsize(subject.Name, font, width)
-                               + "\r\n"
-                               + Ellipsize(subject.DisplayLine, font, width);
-                    worst = Math.Max(worst, MeasureTwoLineHeight(text, MinSubjectNameFontSize, width));
-                }
-            }
-
-            return worst + ButtonPadding + Scale(TextSafetyLogical) + Scale(RowMarginLogical);
-        }
-
-        /// <summary>
-        /// 统一行高（像素）：一屏内按 available/可见行数 平分（并扣掉行间距），
+        /// 统一行高（像素）：一屏内按 available/可见行数 平分，
         /// 再用 [MinRowHeight, MaxRowHeight]（已按 DPI 缩放）夹紧，最后取内容下限。
-        /// 返回值保证：**任何一行的按钮都不会比它需要的更矮**。
+        /// 返回值保证：**任何一行的卡片都不会比它需要的更矮**。
         /// </summary>
         public static int ComputeRowHeightPx(int availableHeightPx, int subjectCount, float dpiScale, int contentFloorPx)
         {
@@ -685,7 +507,6 @@ namespace FtpJumperLite.Ui
             var min = ScaleFor(MinRowHeightLogical, dpiScale);
             var max = ScaleFor(MaxRowHeightLogical, dpiScale);
 
-            // 注意：行高**就是该行占用的总高度**（按钮的上下 Margin 是在行内扣减的），所以这里不减 Margin。
             var height = availableHeightPx > 0
                 ? availableHeightPx / visible
                 : ScaleFor(DefaultRowHeightLogical, dpiScale);
@@ -703,125 +524,12 @@ namespace FtpJumperLite.Ui
         }
 
         /// <summary>
-        /// 重算行高（含吸收行）并同步刷新每行字号与截断文本。
-        /// 会在 Resize 与 Layout 两个时机被调用：只靠 Resize 时，底部工具条/状态栏尚未参与布局，
-        /// 表格可能还是“更高”的旧尺寸，据此算出的行高会偏大、窗口下方留出空隙。
-        /// 带重入保护：本方法内部的赋值（字号/文本/AutoScrollMinSize）又会触发布局。
+        /// 由"文本 + 可用宽高"反推最大可容纳字号：从上限开始每 0.5pt 递减，
+        /// 直到两行文本放得下为止。paddingPx 是拟合时预留的垂直内缩（默认按按钮的 6px）。
         /// </summary>
-        private void ApplyRowLayout()
+        public static float ComputeFittingFontSize(string text, int availableWidth, int rowHeight, int paddingPx = ButtonPadding)
         {
-            if (_inRowLayout)
-            {
-                // 关键：改动行高/字号/AutoScrollMinSize 会再次触发布局，而那次布局里表格客户区可能已经变了
-                // （例如滚动条刚出现）。早先这里直接 return，把这些请求丢掉了，于是"表格尺寸已变、行高还是旧的"
-                // 就一直卡着不收敛 —— 现场那根 31px 滚动条与首行被切，就是这么留下来的。
-                // 现在只记下"还需要再算一遍"，由外层循环收敛。
-                _rowLayoutDirty = true;
-                return;
-            }
-
-            if (_subjects.Count == 0 || _subjectRows.Count == 0)
-            {
-                return;
-            }
-
-            if (_subjectTable.RowStyles.Count < _subjectRows.Count + 1)
-            {
-                return; // 还没建好（吸收行缺失）时不动作
-            }
-
-            _inRowLayout = true;
-            try
-            {
-                // 迭代到稳定：算一遍 → 触发布局 → 若表格客户区又变了就再算一遍（最多几轮，避免死循环）。
-                for (var pass = 0; pass < MaxRowLayoutPasses; pass++)
-                {
-                    _rowLayoutDirty = false;
-                    ApplyRowLayoutCore();
-                    if (!_rowLayoutDirty)
-                    {
-                        return;
-                    }
-                }
-
-                AppLogger.Warn("行高布局在 " + MaxRowLayoutPasses + " 轮后仍未稳定，已停止重算以免死循环。");
-            }
-            finally
-            {
-                _inRowLayout = false;
-            }
-        }
-
-        private void ApplyRowLayoutCore()
-        {
-            var margin = Scale(RowMarginLogical);
-            var available = _subjectTable.ClientSize.Height - _subjectTable.Padding.Vertical;
-            var max = Scale(MaxRowHeightLogical);
-
-            // 先扣掉安全余量再分行：行高"刚好等于"可用高度时，任何一次 1~2px 的收缩都会挤出滚动条。
-            var usable = available - Scale(RowSafetyLogical);
-            if (usable <= 0)
-            {
-                usable = available;
-            }
-
-            var target = ComputeRowHeightPx(usable, _subjects.Count, _dpiScale, ComputeContentFloorPx());
-
-            // 一屏放得下时，把剩余空间尽量分给各行（不超过上限），让列表填满窗口而不是在下面留一条空隙；
-            // 但填的是"扣掉安全余量之后"的空间，所以永远留下 RowSafetyLogical 个逻辑像素的余量。
-            var remainder = 0;
-            if (usable > 0 && _subjects.Count <= MaxVisibleRows)
-            {
-                var share = usable / _subjects.Count;
-                if (share > target)
-                {
-                    target = Math.Min(max, share);
-                }
-
-                // 行高就是该行占用的总高度（按钮的上下 Margin 在行内扣减），所以这里不带 margin。
-                var left = usable - (_subjects.Count * target);
-                if (left > 0 && left < _subjects.Count)
-                {
-                    remainder = left; // 余数逐行 +1px，做到像素级填满
-                }
-            }
-
-            for (var i = 0; i < _subjectRows.Count; i++)
-            {
-                var height = target + (i < remainder ? 1 : 0);
-                _subjectTable.RowStyles[i].Height = height;
-
-                // 行高变化时同步重算“文本截断 + 字号”，保证文字始终放得下且不超宽。
-                ApplyRowTextAndFont(_subjectRows[i], _subjects[i], Math.Max(0, height - margin));
-            }
-
-            // 剩余像素只交给吸收行；滚动时吸收行高度为 0。
-            var rowSpace = (_subjectRows.Count * target) + remainder;
-            SpacerAbsorbs(available > 0 && available - rowSpace > 0);
-
-            // 明确滚动范围：宽度固定 0（表格只允许纵向滚动，否则按钮文字的“首选宽度”
-            // 会把滚动区域撑宽，底部冒出一条横向滚动条）。
-            _subjectTable.AutoScrollMinSize = new Size(0, Math.Max(0, rowSpace));
-        }
-
-        private void SpacerAbsorbs(bool absorb)
-        {
-            if (_spacerRowStyle == null)
-            {
-                return;
-            }
-
-            _spacerRowStyle.SizeType = absorb ? SizeType.Percent : SizeType.Absolute;
-            _spacerRowStyle.Height = absorb ? 100F : 0F;
-        }
-
-        /// <summary>
-        /// 由“文本 + 可用宽高”反推最大可容纳字号：从上限开始每 0.5pt 递减，
-        /// 直到两行文本放得下为止。
-        /// </summary>
-        public static float ComputeFittingFontSize(string text, int availableWidth, int rowHeight)
-        {
-            var maxTextHeight = Math.Max(1, rowHeight - ButtonPadding);
+            var maxTextHeight = Math.Max(1, rowHeight - paddingPx);
             var maxTextWidth = Math.Max(1, availableWidth);
 
             for (var size = MaxSubjectNameFontSize; size > MinSubjectNameFontSize; size -= 0.5F)
@@ -934,11 +642,7 @@ namespace FtpJumperLite.Ui
 
         private void SetInteractionEnabled(bool enabled)
         {
-            foreach (var row in _subjectRows)
-            {
-                row.Enabled = enabled;
-            }
-
+            _subjectList.Enabled = enabled;
             _btnRefresh.Enabled = enabled;
             _btnOpenConfig.Enabled = enabled;
             _btnQuit.Enabled = enabled;

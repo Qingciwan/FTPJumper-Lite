@@ -59,30 +59,21 @@ namespace FtpJumperLite.UiShot
 
                 if (diag)
                 {
-                    var table = GetPrivateField<TableLayoutPanel>(form, "_subjectTable");
-                    Console.WriteLine("表格 client=" + table.ClientSize + " padding=" + table.Padding
-                                      + " 行样式数=" + table.RowStyles.Count + " 控件数=" + table.Controls.Count
-                                      + " 滚动=" + table.VerticalScroll.Visible);
-                    Console.WriteLine("  竖滚动可见=" + table.VerticalScroll.Visible
-                                      + " 横滚动可见=" + table.HorizontalScroll.Visible
-                                      + " 横滚动启用=" + table.HorizontalScroll.Enabled
-                                      + " AutoScrollMinSize=" + table.AutoScrollMinSize
-                                      + " DisplayRectangle=" + table.DisplayRectangle
-                                      + " 子控件最大右边界=" + (table.Controls.Count == 0 ? 0 : table.Controls.Cast<Control>().Max(c => c.Right))
-                                      + " 按钮首选宽=" + (table.Controls.Count == 0 ? 0 : table.Controls.Cast<Control>().Max(c => c.PreferredSize.Width)));
+                    var list = GetPrivateField<SubjectListControl>(form, "_subjectList");
+                    Console.WriteLine("科目区 client=" + list.ClientSize
+                                      + " 行数=" + list.Subjects.Count
+                                      + " 行高=" + list.RowHeightPx
+                                      + " 内容高=" + list.ContentHeightPx
+                                      + " 可滚动=" + list.MaxScrollPx
+                                      + " 偏移=" + list.ScrollOffsetPx
+                                      + " 可见行=" + list.VisibleRowCount
+                                      + " 字号=" + list.TitleFontSize);
 
-                    foreach (Control row in table.Controls)
+                    for (var i = 0; i < list.Subjects.Count; i++)
                     {
-                        var button = (Button)row;
-                        var textHeight = MainForm.MeasureTwoLineHeight(
-                            button.Text,
-                            button.Font.Size,
-                            Math.Max(1, button.ClientSize.Width - 6));
-                        Console.WriteLine("  行 Y=" + row.Top + " 行高=" + row.Height
-                                          + " 按钮客户高=" + button.ClientSize.Height
-                                          + " 字号=" + button.Font.Size
-                                          + " 文本高=" + textHeight
-                                          + " 文本=" + button.Text.Replace("\r\n", " / "));
+                        var bounds = list.GetRowBounds(i);
+                        Console.WriteLine("  行" + i + " Y=" + bounds.Top + " 高=" + bounds.Height + " 宽=" + bounds.Width
+                                          + " 文本=" + list.Subjects[i].Name.Replace("\r\n", " / "));
                     }
                 }
 
