@@ -678,7 +678,7 @@ namespace FtpJumperLite.Tests
             foreach (var rowHeight in new[] { 56, 64, 80, 92, 104, 116, 124, 140, 152 })
             {
                 var fontSize = MainForm.ComputeFittingFontSize(text, 640, rowHeight);
-                Assert.InRange(fontSize, 12F, 17F);
+                Assert.InRange(fontSize, MainForm.MinSubjectNameFontSize, MainForm.MaxSubjectNameFontSize);
                 Assert.True(
                     fontSize >= previous,
                     "字号应随行高单调不减（" + rowHeight + " → " + fontSize + "）");

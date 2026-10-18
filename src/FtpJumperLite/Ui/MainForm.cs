@@ -46,9 +46,23 @@ namespace FtpJumperLite.Ui
         private const int DefaultFormMarginLogical = 40;
         private const int DefaultFormSideMarginLogical = 80;
         private const int DefaultFormMinWidthLogical = 430;
-        private const int DefaultFormMaxWidthLogical = 760;
+
+        /// <summary>默认窗口宽度的上限（逻辑像素）。"折中档"比原来的 760 更窄，观感更接近 0919。</summary>
+        private const int DefaultFormMaxWidthLogical = 620;
+
+        /// <summary>
+        /// 默认宽度 = 高度 × 该比例。原来是 0.72（宽高比偏"方"），0.58 更接近 0919 那版的窄条比例；
+        /// 再窄就会挤压底部三个按钮（各 120 逻辑像素 + 间距），所以停在 0.58。
+        /// </summary>
+        private const double DefaultFormAspectRatio = 0.58;
+
         public const float MinSubjectNameFontSize = 12F;
-        public const float MaxSubjectNameFontSize = 17F;
+
+        /// <summary>
+        /// 科目名字号上限。"折中档"从 17 降到 15：0919 在 200% 机器上的观感是"文字比行高小一圈"，
+        /// 17pt 会把行塞满；15pt 在同一行高下留出余量，更接近那版的呼吸感。
+        /// </summary>
+        public const float MaxSubjectNameFontSize = 15F;
 
         /// <summary>Button 默认 Padding=3，文字区比按钮本身窄/矮 6px（也是字号拟合的默认预留）。</summary>
         private const int ButtonPadding = 6;
@@ -92,7 +106,7 @@ namespace FtpJumperLite.Ui
             // workArea 已经是当前 DPI 下的像素，只有"下限/上限"这类常量需要 Scale。
             var workArea = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 800);
             var defaultHeight = Math.Max(Scale(MinFormHeightLogical), workArea.Height - Scale(DefaultFormMarginLogical));
-            var defaultWidth = (int)Math.Round(defaultHeight * 0.72);
+            var defaultWidth = (int)Math.Round(defaultHeight * DefaultFormAspectRatio);
             defaultWidth = Math.Min(defaultWidth, workArea.Width - Scale(DefaultFormSideMarginLogical));
             defaultWidth = Math.Min(Scale(DefaultFormMaxWidthLogical), Math.Max(Scale(DefaultFormMinWidthLogical), defaultWidth));
             Size = new Size(defaultWidth, defaultHeight);
