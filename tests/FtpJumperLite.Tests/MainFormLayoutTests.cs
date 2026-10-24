@@ -606,6 +606,64 @@ namespace FtpJumperLite.Tests
             Assert.True(failure == null, "科目区滚动/命中测试失败：" + failure);
         }
 
+        /// <summary>
+        /// 两个小窗口（设置 / 新增科目）必须让标签与单选钮跟着字体长高。
+        /// Label / RadioButton 的默认高度是**硬编码像素**（23 / 24），不随 DPI 变；
+        /// 200% 下字体长到 27px 以上时，固定高度会把文字裁掉。这里把字体放大到 20pt
+        /// 模拟高 DPI 的字体高度，断言没有任何控件的框比它自己的字还矮。
+        /// </summary>
+        [Fact]
+        public void Dialogs_GrowTheirLabelsWithTheFont()
+        {
+            Exception? failure = null;
+            var thread = new Thread(() =>
+            {
+                MakeThreadDpiAware();
+                try
+                {
+                    using (var settings = new SettingsForm(UiSettings.CreateDefault(), UiPalette.Light(), 2F))
+                    using (var editor = new SubjectEditorForm(UiPalette.Light(), 2F, null))
+                    {
+                        foreach (var form in new Form[] { settings, editor })
+                        {
+                            form.Font = new Font("Microsoft YaHei UI", 20F);
+                            form.PerformLayout();
+                            AssertNoClippedText(form, form.GetType().Name);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            thread.Join();
+
+            Assert.True(failure == null, "小窗口在高 DPI 下会裁字：" + failure);
+        }
+
+        private static void AssertNoClippedText(Control parent, string where)
+        {
+            foreach (Control child in parent.Controls)
+            {
+                if (child is Label || child is RadioButton)
+                {
+                    var needed = child.Font.Height - 2; // 允许 1~2px 的行高取整误差
+                    Assert.True(
+                        child.Height >= needed,
+                        where + " 中的「" + child.Text + "」高度只有 " + child.Height
+                        + "px，而字体需要 " + child.Font.Height + "px（会被裁字）");
+                }
+
+                if (child.HasChildren)
+                {
+                    AssertNoClippedText(child, where);
+                }
+            }
+        }
+
         /// <summary>空科目列表：布局安全、无滚动、命中测试返回 -1（不抛异常）。</summary>
         [Fact]
         public void EmptySubjects_LayoutIsSafe()

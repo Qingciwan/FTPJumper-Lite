@@ -47,10 +47,12 @@ namespace FtpJumperLite.Ui
             y += S(28);
             _dark = MakeRadio("深色", y);
             y += S(28);
-            _custom = MakeRadio("自定义调色板（写在 settings.json 的 palette.custom）", y);
+            _custom = MakeRadio("自定义调色板（写在 palette.custom）", y);
             y += S(40);
 
-            Controls.Add(MakeLabel("字号（60~200，100 = 默认）", y + S(4)));
+            // 标签单独一行、输入框在它下面 —— 之前两者用了同一个 Left/Top，会叠在一起。
+            Controls.Add(MakeLabel("字号（60~200，100 = 默认）", y));
+            y += S(20);
 
             _fontScale = new NumericUpDown
             {
@@ -142,26 +144,30 @@ namespace FtpJumperLite.Ui
 
         private Label MakeLabel(string text, int top)
         {
-            var label = new Label
+            // AutoSize：Label 的默认高度是硬编码 23px，不随 DPI 变；
+            // 高 DPI 下字体会长到 27px+，固定高度会把文字裁掉。MaximumSize 只限宽度，到边自动换行。
+            return new Label
             {
                 Text = text,
                 Left = S(18),
                 Top = top,
-                Width = S(330),
+                AutoSize = true,
+                MaximumSize = new Size(S(330), 0),
                 ForeColor = ForeColor,
                 BackColor = BackColor
             };
-            return label;
         }
 
         private RadioButton MakeRadio(string text, int top)
         {
+            // 同上：RadioButton 默认尺寸也是硬编码（104×24），必须让它自己跟着字体长高。
             var radio = new RadioButton
             {
                 Text = text,
                 Left = S(24),
                 Top = top,
-                Width = S(320),
+                AutoSize = true,
+                MaximumSize = new Size(S(320), 0),
                 ForeColor = ForeColor,
                 BackColor = BackColor
             };

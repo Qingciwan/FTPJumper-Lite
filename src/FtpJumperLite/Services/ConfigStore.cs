@@ -195,6 +195,87 @@ namespace FtpJumperLite.Services
             }
         }
 
+        /// <summary>修改一个已有科目（按原 id 定位）：整份校验通过才写回，失败时磁盘保持原样。</summary>
+        public bool TryUpdateSubject(string originalId, Subject updated, out string? error)
+        {
+            error = null;
+            if (updated == null)
+            {
+                error = "科目为空。";
+                return false;
+            }
+
+            if (!TryLoad(out var config, out var loadError) || config == null)
+            {
+                error = loadError ?? "无法读取配置文件。";
+                return false;
+            }
+
+            var index = config.Subjects.FindIndex(s => string.Equals(s.Id, originalId, StringComparison.OrdinalIgnoreCase));
+            if (index < 0)
+            {
+                error = "找不到要修改的科目：" + originalId;
+                return false;
+            }
+
+            SanitizeAppearance(updated);
+            config.Subjects[index] = updated;
+
+            var problems = ValidateAll(config, ConfigPath);
+            if (problems.Count > 0)
+            {
+                error = "修改未通过校验：\r\n" + string.Join("\r\n", problems);
+                return false;
+            }
+
+            try
+            {
+                WriteFileAtomic(config);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = "写回配置失败：" + ex.Message;
+                return false;
+            }
+        }
+
+        /// <summary>删除一个科目（至少保留一个，由 ValidateAll 把关）；写回前自动备份。</summary>
+        public bool TryDeleteSubject(string id, out string? error)
+        {
+            error = null;
+            if (!TryLoad(out var config, out var loadError) || config == null)
+            {
+                error = loadError ?? "无法读取配置文件。";
+                return false;
+            }
+
+            var removed = config.Subjects.RemoveAll(s => string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase));
+            if (removed == 0)
+            {
+                error = "找不到要删除的科目：" + id;
+                return false;
+            }
+
+            var problems = ValidateAll(config, ConfigPath);
+            if (problems.Count > 0)
+            {
+                error = "删除未通过校验（至少保留一个科目）：\r\n" + string.Join("\r\n", problems);
+                return false;
+            }
+
+            try
+            {
+                WriteFileAtomic(config);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = "写回配置失败：" + ex.Message;
+                return false;
+            }
+        }
+
         /// <summary>整份配置的字段校验，返回中文问题列表（空 = 通过）。</summary>
         public static List<string> ValidateAll(AppConfig? config, string? configPath = null)
         {

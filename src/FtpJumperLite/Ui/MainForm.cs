@@ -198,6 +198,7 @@ namespace FtpJumperLite.Ui
                 TooltipProvider = BuildTooltip
             };
             _subjectList.SubjectActivated += (_, e) => OpenSubject(e.Subject);
+            _subjectList.SubjectContextRequested += (_, e) => ShowSubjectMenu(e.Subject, e.ScreenLocation);
             _root.Controls.Add(_subjectList, 0, 1);
 
             _btnRefresh = MakeBottomButton("刷新配置", (_, _) => ReloadSubjects());
@@ -289,6 +290,68 @@ namespace FtpJumperLite.Ui
 
                 Invalidate(true);
             }
+        }
+
+        /// <summary>科目右键菜单：编辑 / 删除 / 新增 / 打开配置目录。</summary>
+        private void ShowSubjectMenu(Subject subject, Point screenLocation)
+        {
+            var menu = new ContextMenuStrip { BackColor = _palette.CardBack, ForeColor = _palette.TitleText };
+            menu.Items.Add("编辑此科目…", null, (_, _) => EditSubject(subject));
+            menu.Items.Add("删除此科目…", null, (_, _) => DeleteSubject(subject));
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("新增科目…", null, (_, _) => AddSubject());
+            menu.Items.Add("打开配置目录", null, (_, _) => OpenConfigDirectory(null, EventArgs.Empty));
+            menu.Closed += (_, _) => menu.Dispose();
+            menu.Show(screenLocation);
+        }
+
+        /// <summary>编辑一个已有科目：表单预填当前值，保存走整份校验。</summary>
+        private void EditSubject(Subject subject)
+        {
+            using (var dialog = new SubjectEditorForm(_palette, _dpiScale, subject))
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK)
+                {
+                    return;
+                }
+
+                if (!_configStore.TryUpdateSubject(subject.Id, dialog.Result, out var error))
+                {
+                    MessageBox.Show(this, error, "修改科目失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                ReloadSubjects();
+                _statusLabel.Text = "已保存科目「" + dialog.Result.Name + "」。";
+                AppLogger.Info("已修改科目：" + dialog.Result.Id + "（" + dialog.Result.Name + "）");
+            }
+        }
+
+        /// <summary>删除一个科目（写回前自动备份，且至少保留一个科目）。</summary>
+        private void DeleteSubject(Subject subject)
+        {
+            var confirm = MessageBox.Show(
+                this,
+                "确定删除科目「" + subject.Name + "」吗？\r\n\r\n会从 subjects.json 里移除（写回前自动备份为 .bak），"
+                + "且至少保留一个科目。",
+                "删除科目",
+                MessageBoxButtons.OKCancel,
+                MessageBoxIcon.Warning);
+
+            if (confirm != DialogResult.OK)
+            {
+                return;
+            }
+
+            if (!_configStore.TryDeleteSubject(subject.Id, out var error))
+            {
+                MessageBox.Show(this, error, "删除科目失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            ReloadSubjects();
+            _statusLabel.Text = "已删除科目「" + subject.Name + "」。";
+            AppLogger.Info("已删除科目：" + subject.Id + "（" + subject.Name + "）");
         }
 
         /// <summary>新增科目：字段级表单 → 整份校验 → 写回 subjects.json → 重新加载。</summary>

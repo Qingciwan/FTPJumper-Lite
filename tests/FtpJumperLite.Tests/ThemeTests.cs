@@ -267,6 +267,47 @@ namespace FtpJumperLite.Tests
         // ---------- 新增科目（字段级表单的保存路径） ----------
 
         [Fact]
+        public void ConfigStore_TryUpdateAndDeleteSubject()
+        {
+            var path = Path.Combine(_dir, "subjects-edit.json");
+
+            // 先写一份干净的两科目配置（不要走到"缺失→生成示例"那条路径）。
+            File.WriteAllText(
+                path,
+                "{\"version\":2,\"subjects\":[" +
+                "{\"id\":\"a\",\"name\":\"语文\",\"host\":\"ftp.example.com\",\"port\":21,\"user\":\"u\",\"password\":\"p\",\"remotePath\":\"/\",\"credentialMode\":\"inline\",\"lastSyncAt\":\"\"}," +
+                "{\"id\":\"b\",\"name\":\"数学\",\"host\":\"ftp.example.com\",\"port\":21,\"user\":\"u\",\"password\":\"p\",\"remotePath\":\"/\",\"credentialMode\":\"inline\",\"lastSyncAt\":\"\"}]}");
+
+            var store = new ConfigStore(path);
+
+            // 修改：改名 + 加颜色/底纹
+            var updated = new Subject
+            {
+                Id = "a", Name = "语文（新）", Host = "ftp.example.com", Port = 21,
+                User = "u", Password = "p", RemotePath = "/pub", CredentialMode = "inline",
+                ColorHex = "绿", Texture = "grid"
+            };
+            Assert.True(store.TryUpdateSubject("a", updated, out var e3), e3);
+
+            Assert.True(store.TryLoad(out var config, out var e4), e4);
+            var a = config!.Subjects.Find(s => s.Id == "a");
+            Assert.NotNull(a);
+            Assert.Equal("语文（新）", a!.Name);
+            Assert.Equal("#107C10", a.ColorHex);
+            Assert.Equal("grid", a.Texture);
+
+            // 删除
+            Assert.True(store.TryDeleteSubject("b", out var e5), e5);
+            Assert.True(store.TryLoad(out var afterDelete, out var e6), e6);
+            Assert.Single(afterDelete!.Subjects);
+            Assert.Equal("a", afterDelete.Subjects[0].Id);
+
+            // 不能把科目删光（至少保留一个）
+            Assert.False(store.TryDeleteSubject("a", out var deleteError));
+            Assert.False(string.IsNullOrEmpty(deleteError));
+        }
+
+        [Fact]
         public void ConfigStore_TryAddSubject_AppendsAndPersists()
         {
             var path = Path.Combine(_dir, "subjects-add.json");

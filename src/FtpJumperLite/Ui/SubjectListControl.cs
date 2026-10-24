@@ -105,6 +105,9 @@ namespace FtpJumperLite.Ui
         /// <summary>行被激活（单击 / 键盘 Enter）。</summary>
         public event EventHandler<SubjectEventArgs>? SubjectActivated;
 
+        /// <summary>在某一行的位置按下右键：请求上下文菜单（编辑 / 删除 / 新增）。</summary>
+        public event EventHandler<SubjectContextEventArgs>? SubjectContextRequested;
+
         /// <summary>悬停时给 tooltip 的文本（由 MainForm 提供；返回 null 表示不显示）。</summary>
         public Func<Subject, string?>? TooltipProvider { get; set; }
 
@@ -778,7 +781,31 @@ namespace FtpJumperLite.Ui
         protected override void OnMouseDown(MouseEventArgs e)
         {
             base.OnMouseDown(e);
-            if (!Enabled || e.Button != MouseButtons.Left)
+            if (!Enabled)
+            {
+                return;
+            }
+
+            // 右键：对命中的科目请求上下文菜单（编辑 / 删除 / 新增…）。
+            if (e.Button == MouseButtons.Right)
+            {
+                var hit = GetRowIndexAt(e.Location);
+                if (hit >= 0 && hit < _subjects.Count)
+                {
+                    _currentIndex = hit;
+                    _hoverIndex = hit;
+                    _pressedIndex = -1;
+                    Focus();
+                    Invalidate();
+                    SubjectContextRequested?.Invoke(
+                        this,
+                        new SubjectContextEventArgs(hit, _subjects[hit], PointToScreen(e.Location)));
+                }
+
+                return;
+            }
+
+            if (e.Button != MouseButtons.Left)
             {
                 return;
             }
@@ -1021,5 +1048,22 @@ namespace FtpJumperLite.Ui
         }
 
         public Subject Subject { get; }
+    }
+
+    /// <summary>右键上下文菜单请求：行号、科目、屏幕坐标。</summary>
+    public sealed class SubjectContextEventArgs : EventArgs
+    {
+        public SubjectContextEventArgs(int index, Subject subject, Point screenLocation)
+        {
+            Index = index;
+            Subject = subject;
+            ScreenLocation = screenLocation;
+        }
+
+        public int Index { get; }
+
+        public Subject Subject { get; }
+
+        public Point ScreenLocation { get; }
     }
 }

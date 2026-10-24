@@ -79,8 +79,11 @@ if (-not $SkipTests) {
 Write-Host '== selfcheck =='
 $exe = Join-Path $root "src\FtpJumperLite\bin\$Configuration\net48\FtpJumperLite.exe"
 if (-not (Test-Path $exe)) { throw "build output not found: $exe" }
-$outFile = Join-Path $root 'selfcheck.out.txt'
-$errFile = Join-Path $root 'selfcheck.err.txt'
+# Scratch output: keep it under _private (git-ignored) instead of the repo root.
+$artifactDir = Join-Path $root '_private\artifacts'
+New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+$outFile = Join-Path $artifactDir 'selfcheck.out.txt'
+$errFile = Join-Path $artifactDir 'selfcheck.err.txt'
 $p = Start-Process -FilePath $exe -ArgumentList '--selfcheck' -Wait -PassThru `
     -RedirectStandardOutput $outFile -RedirectStandardError $errFile -NoNewWindow
 if ($p.ExitCode -ne 0) {
