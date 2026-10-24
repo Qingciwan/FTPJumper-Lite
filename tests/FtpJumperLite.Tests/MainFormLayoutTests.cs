@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Threading;
 using System.Windows.Forms;
 using FtpJumperLite.Models;
+using FtpJumperLite.Services;
 using FtpJumperLite.Ui;
 using Newtonsoft.Json;
 using Xunit;
@@ -475,72 +476,62 @@ namespace FtpJumperLite.Tests
         /// <summary>
         /// 目标机缺陷回归：内容放得下时**不允许**出现滚动范围，且第一行必须完整可见。
         /// 现场表现是"表格比可视区高 31px → 出滚动条 → 首行被 AutoScroll 滚出去、顶部被切"。
+        ///
+        /// 这里直接测 SubjectListControl 而不经过真实窗口：窗口尺寸会被操作系统的"最大跟踪尺寸"
+        /// 钳制（本机 175% 缩放下 MaxWindowTrackSize 只有 ~637px），在 175%/200% 下根本给不到
+        /// 1000px 高，那样这条测试会因为环境而不是代码失败。
         /// </summary>
         [Fact]
         public void RowsFit_ThenNoScrollbarAndFirstRowIsNotClipped()
         {
             var configPath = Path.Combine(_dir, "fit.json");
             File.WriteAllText(configPath, BuildConfigJson(10));
+            var subjects = LoadSubjects(configPath);
 
-            var sawFitCase = false;
-            foreach (var size in new[] { new Size(740, 1000), new Size(697, 680), new Size(660, 620) })
+            using (var list = new SubjectListControl { DpiScale = 1.75F, Subjects = subjects })
             {
-                Exception? failure = null;
-                var fit = false;
-                var thread = new Thread(() =>
-                {
-                    MakeThreadDpiAware();
-                    try
-                    {
-                        fit = AssertNoScrollAndFirstRowIntact(configPath, size);
-                    }
-                    catch (Exception ex)
-                    {
-                        failure = ex;
-                    }
-                });
-                thread.SetApartmentState(ApartmentState.STA);
-                thread.Start();
-                thread.Join();
+                var padTop = MainForm.ScaleFor(list.Metrics.PadTopLogical, list.DpiScale);
+                var padBottom = MainForm.ScaleFor(list.Metrics.PadBottomLogical, list.DpiScale);
 
-                Assert.True(failure == null, "窗口 " + size + " 下布局校验失败：" + failure);
-                sawFitCase |= fit;
+                // ① 给足高度：内容一定放得下 → 不允许有任何滚动范围，首行贴顶。
+                list.ClientSize = new Size(700, 2000);
+                list.RelayoutNow();
+                var content = list.ContentHeightPx;
+                Assert.True(
+                    content + padTop + padBottom <= list.ClientSize.Height,
+                    "内容高=" + content + " 可用=" + (list.ClientSize.Height - padTop - padBottom) + "：这个尺寸下应当放得下。");
+                Assert.Equal(0, list.MaxScrollPx);
+                Assert.Equal(0, list.ScrollOffsetPx);
+                Assert.Equal(padTop, list.GetRowBounds(0).Top);
+
+                // ② 高度 = 上内边距 + 内容 + 下内边距（再留 8px 余量）：仍然不该出现滚动条。
+                list.ClientSize = new Size(700, content + padTop + padBottom + 8);
+                list.RelayoutNow();
+                Assert.Equal(0, list.MaxScrollPx);
+                Assert.Equal(padTop, list.GetRowBounds(0).Top);
+                Assert.True(list.GetRowBounds(9).Bottom <= list.ClientSize.Height, "最后一行应完整落在控件内。");
+
+                // ③ 比"行高取下限都放不下"还矮：这时才必须滚动；初始偏移 0、首行不能被挤出顶部。
+                var minContent = (10 * MainForm.ScaleFor(list.Metrics.MinRowHeightLogical, list.DpiScale))
+                                 + (9 * MainForm.ScaleFor(list.Metrics.RowGapLogical, list.DpiScale));
+                var tight = Math.Max(120, minContent / 2);
+                list.ClientSize = new Size(700, tight);
+                list.RelayoutNow();
+                Assert.True(
+                    list.MaxScrollPx > 0,
+                    "行高已到下限仍放不下（内容高=" + list.ContentHeightPx + " 可视=" + list.ClientSize.Height + "）时应当可以滚动。");
+                Assert.Equal(0, list.ScrollOffsetPx);
+                Assert.Equal(padTop, list.GetRowBounds(0).Top);
             }
-
-            Assert.True(sawFitCase, "至少要有一个尺寸能放下 10 行，否则这条测试没验到“放得下就不该有滚动条”。");
         }
 
-        /// <summary>
-        /// 返回值表示该尺寸下内容是否放得下。与是否溢出无关的硬约束：首行完整、滚动位置为 0。
-        /// </summary>
-        private static bool AssertNoScrollAndFirstRowIntact(string configPath, Size size)
+        /// <summary>从配置文件读出科目列表（不经过窗体，避免受窗口尺寸钳制影响）。</summary>
+        private static List<Subject> LoadSubjects(string configPath)
         {
-            using (var form = new MainForm(configPath))
-            {
-                form.Size = size;
-                form.CreateControl();
-                form.PerformLayout();
-
-                var list = GetList(form);
-                var dpi = list.DpiScale;
-                var padTop = MainForm.ScaleFor(list.Metrics.PadTopLogical, dpi);
-                var padBottom = MainForm.ScaleFor(list.Metrics.PadBottomLogical, dpi);
-                var avail = list.ClientSize.Height - padTop - padBottom;
-                var fits = list.ContentHeightPx <= avail;
-                var info = "内容高=" + list.ContentHeightPx + " 可用=" + avail
-                           + " 行高=" + list.RowHeightPx + " 可滚动=" + list.MaxScrollPx;
-
-                Assert.True(list.GetRowBounds(0).Bottom <= list.ClientSize.Height, "首行底部越界：" + info);
-                Assert.Equal(0, list.ScrollOffsetPx);
-
-                if (fits)
-                {
-                    Assert.Equal(0, list.MaxScrollPx);
-                    Assert.Equal(padTop, list.GetRowBounds(0).Top);
-                }
-
-                return fits;
-            }
+            var store = new ConfigStore(configPath);
+            Assert.True(store.TryLoad(out var config, out var error), error);
+            Assert.NotNull(config);
+            return config!.Subjects;
         }
 
         /// <summary>

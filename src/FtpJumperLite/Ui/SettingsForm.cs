@@ -96,6 +96,14 @@ namespace FtpJumperLite.Ui
             AcceptButton = ok;
             CancelButton = cancel;
 
+            // 高度按内容算（高 DPI 下标签可能换行），再夹到屏幕可用区；不写死高度，
+            // 否则内容一长就会把底部按钮顶出客户区。
+            var desiredHeight = y + S(32) + S(16);
+            var work = Screen.PrimaryScreen?.WorkingArea.Height ?? 1080;
+            var nonClient = Height - ClientSize.Height;
+            var maxClient = Math.Max(S(220), work - nonClient - S(24));
+            ClientSize = new Size(S(360), Math.Min(desiredHeight, maxClient));
+
             SelectCurrentTheme();
         }
 
