@@ -700,10 +700,25 @@ namespace FtpJumperLite.Tests
         }
 
         [Fact]
+        public void BuiltExe_CarriesReleaseVersionAndProductName()
+        {
+            // 发行名与版本号写在 csproj 里，构建产物上必须能读到（老师右键 → 详细信息 看到的就是这些）。
+            var exe = Path.Combine(AppContext.BaseDirectory, "RE-FTPJumperLite.exe");
+            Assert.True(File.Exists(exe), "测试输出目录里应有被测 exe：" + exe);
+
+            var info = System.Diagnostics.FileVersionInfo.GetVersionInfo(exe);
+
+            Assert.Equal("0.1.1.4", info.FileVersion);
+            Assert.Equal("0.1.1.4", info.ProductVersion);
+            Assert.Contains("RE-FTPJumper Lite", info.ProductName);
+            Assert.Contains("RE-FTPJumper Lite", info.FileDescription);
+        }
+
+        [Fact]
         public void AppIcon_LoadsLargeFrameFromBuiltExe()
         {
             // 测试输出目录里就有被测 exe（由 csproj 的 ApplicationIcon 嵌入了 Report1.ico）。
-            var exe = Path.Combine(AppContext.BaseDirectory, "FtpJumperLite.exe");
+            var exe = Path.Combine(AppContext.BaseDirectory, "RE-FTPJumperLite.exe");
             Assert.True(File.Exists(exe), "测试输出目录里应有被测 exe：" + exe);
 
             using (var icon = AppIcon.LoadFrom(exe))

@@ -1,4 +1,6 @@
-# FtpJumper Lite 课堂资料助手（liteEdition）
+# RE-FTPJumper Lite 课堂资料助手（liteEdition）
+
+> 当前发行版：**RE-FTPJumper Lite 0.1.1.4**，可执行文件 `RE-FTPJumperLite.exe`。
 
 **lite 版**：把每个科目的 FTP 资料**直接交给 Windows 文件资源管理器打开**（写死 explorer.exe，不走系统 ftp 关联），
 不下载、不缓存、不做增量比对。免安装单 exe，运行环境 Windows 11（24H2 验证目标）+ .NET Framework 4.8（系统自带）。
@@ -10,7 +12,7 @@
 
 ## 1. 教师使用说明
 
-1. 双击 `FtpJumperLite.exe` 启动，出现科目按钮列表（单列列表，含高分屏适配）。
+1. 双击 `RE-FTPJumperLite.exe` 启动，出现科目按钮列表（单列列表，含高分屏适配）。
 2. 单击某个科目 → 程序立刻拼出该科目的 `ftp://` 网址并交给**文件资源管理器**打开，
    直接浏览远端目录，不产生任何本地副本。
 3. 修改配置：点底部「打开配置目录」→ 用记事本编辑 `subjects.json` → 保存 → 回程序点「刷新配置」。
@@ -238,7 +240,7 @@ powershell -ExecutionPolicy Bypass -File .\publish.ps1
 - 若 `.packages\` 存在，脚本会把 NuGet 包目录指向它，构建可离线/自包含（该目录不入库）。
 - 图标：`Report1.ico`（32bpp，16/24/32/48/64/72/96/128/256 九个尺寸）经 `<ApplicationIcon>` 嵌入 exe，
   并由 `Ui/AppIcon.cs` 赋给各窗体，保证资源管理器、标题栏、任务栏与 Alt+Tab 显示一致
-  （主程序 `FtpJumperLite.exe` 与本地测试服务器 `FtpLiteTestServer.exe` 都已应用）。
+  （主程序 `RE-FTPJumperLite.exe` 与本地测试服务器 `FtpLiteTestServer.exe` 都已应用）。
   - `AppIcon` 用 Win32 `PrivateExtractIcons` 取**最大的一帧（256）**再交给系统缩放：
     `Icon.ExtractAssociatedIcon` 只能拿到 32×32，在 2K@200% 下标题栏/任务栏会发虚；
     而 `new Icon(exe路径, 宽, 高)` 对 exe **一律抛异常**（只对 .ico 有效），
@@ -249,8 +251,8 @@ powershell -ExecutionPolicy Bypass -File .\publish.ps1
 ### 命令行
 
 ```powershell
-FtpJumperLite.exe --selfcheck [--cfg 路径]                  # 只读配置、不联网、不打印明文密码
-FtpJumperLite.exe --url [科目id或名称] [--show-password] [--open] [--cfg 路径]
+RE-FTPJumperLite.exe --selfcheck [--cfg 路径]                  # 只读配置、不联网、不打印明文密码
+RE-FTPJumperLite.exe --url [科目id或名称] [--show-password] [--open] [--cfg 路径]
 ```
 
 `--url` 打印该科目将打开的完整字段（主机/端口/用户名/远端路径/凭据方式）与网址：
@@ -279,7 +281,7 @@ FtpJumperLite.exe --url [科目id或名称] [--show-password] [--open] [--cfg �
   - 行高与 DPI **等比**（`ComputeRowHeightPx` 在 1.0/1.5/2.0 下的比例关系），内容下限优先于夹紧值，
     11 个科目时行高与 10 个科目一致（不会因为多一行而变矮）。
   - 尺寸扫描：9 种宽度 × 10 种高度 × {2, 11} 科目，全面扫“行高不一致 / 留白不对称”。
-- 图标：从构建产物 `FtpJumperLite.exe` 中能取到 ≥48px 的大尺寸帧（高分屏用），非法路径返回 null。
+- 图标：从构建产物 `RE-FTPJumperLite.exe` 中能取到 ≥48px 的大尺寸帧（高分屏用），非法路径返回 null。
 
 - 网址拼装：默认端口省略、非默认端口、中文/空格路径、`..`/冗余斜杠归一化、特殊字符与中文密码转义、
   IPv6 方括号（含已带括号/括号不匹配）、`prompt` 模式不带凭据、匿名账号、脱敏只隐藏密码、

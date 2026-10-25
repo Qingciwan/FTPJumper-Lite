@@ -1,17 +1,26 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net48</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>FtpJumperLite</RootNamespace>
-    <AssemblyName>FtpJumperLite</AssemblyName>
+    <!-- 输出文件名跟着发行名走：RE-FTPJumperLite.exe（命名空间保持 FtpJumperLite 不变）。 -->
+    <AssemblyName>RE-FTPJumperLite</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- 仓库自带一份图标（32bpp，16/24/32/48/64/72/96/128/256 九个尺寸），保证本文件夹可独立编译。 -->
     <ApplicationIcon>..\..\Report1.ico</ApplicationIcon>
-    <AssemblyTitle>FtpJumper Lite 课堂资料助手</AssemblyTitle>
-    <Product>FtpJumper Lite</Product>
-    <Version>0.1.0</Version>
+    <AssemblyTitle>RE-FTPJumper Lite 课堂资料助手</AssemblyTitle>
+    <Product>RE-FTPJumper Lite</Product>
+    <Company>Qingciwan</Company>
+    <Copyright>CC BY-NC-SA 4.0</Copyright>
+    <!-- 本次更新版本号（文件属性 → 详细信息 里能看到 文件版本/产品版本）。 -->
+    <Version>0.1.1.4</Version>
+    <AssemblyVersion>0.1.1.4</AssemblyVersion>
+    <FileVersion>0.1.1.4</FileVersion>
+    <InformationalVersion>0.1.1.4</InformationalVersion>
+    <!-- 不要在"产品版本"后面拼 git 提交哈希：老师看到的应当是干净的四段版本号。 -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>

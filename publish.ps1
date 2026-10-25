@@ -1,4 +1,4 @@
-<#
+﻿<#
 Build Release and assemble a clean deploy folder for the classroom PC (lite edition).
 
 Usage:
@@ -24,7 +24,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $scriptsDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = $scriptsDir
-$payload = @('FtpJumperLite.exe', 'FtpJumperLite.exe.config', 'Newtonsoft.Json.dll')
+$payload = @('RE-FTPJumperLite.exe', 'RE-FTPJumperLite.exe.config', 'Newtonsoft.Json.dll')
 $docs = @('README.md', 'LICENSE.txt', 'THIRD-PARTY-NOTICES.txt')
 $binDir = Join-Path $root 'src\FtpJumperLite\bin\Release\net48'
 
