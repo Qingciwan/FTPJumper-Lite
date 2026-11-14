@@ -1,7 +1,9 @@
-﻿using System;
+using System;
 using System.Drawing;
+using System.IO;
 using System.Windows.Forms;
 using FtpJumperLite.Models;
+using FtpJumperLite.Services;
 
 namespace FtpJumperLite.Ui
 {
@@ -43,6 +45,12 @@ namespace FtpJumperLite.Ui
             ForeColor = palette.TitleText;
             Font = fonts.Create(10F);
             ClientSize = new Size(S(360), S(320));
+
+            // 把字体文件直接拖进窗口也能换字体：某些机器上"文件对话框 + 外壳扩展"不稳，
+            // 这条不经过对话框的入口可以照常使用。
+            AllowDrop = true;
+            DragEnter += OnFontFileDragEnter;
+            DragDrop += OnFontFileDragDrop;
 
             var y = S(16);
             Controls.Add(MakeLabel("主题", y));
@@ -196,46 +204,151 @@ namespace FtpJumperLite.Ui
 
         private void ChooseFontFile()
         {
+            // 先记一行：万一某个机器上"打开文件对话框"这一步就把进程搞崩（外壳扩展是原生代码，
+            // 托管层拦不住），日志里也能确定它死在对话框上，而不是我们的加载代码里。
+            AppLogger.Info("界面字体：打开文件选择对话框…");
+
+            string fileName;
             using (var dialog = new OpenFileDialog
                    {
                        Title = "选择界面字体文件",
                        Filter = "字体文件 (*.ttf;*.otf;*.ttc)|*.ttf;*.otf;*.ttc|所有文件 (*.*)|*.*",
-                       CheckFileExists = true
+                       CheckFileExists = true,
+                       RestoreDirectory = true
                    })
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK)
                 {
+                    AppLogger.Info("界面字体：取消选择");
                     return;
                 }
 
-                UiFontSet loaded;
-                try
-                {
-                    loaded = UiFontSet.LoadFile(dialog.FileName);
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show(
-                        this,
-                        "这个字体文件加载失败：\r\n" + ex.Message,
-                        "字体不可用",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Warning);
-                    return;
-                }
-
-                _pendingFontFile = UiFontSet.MakeStorablePath(dialog.FileName, _baseDirectory);
-                _pendingFontFamily = loaded.FamilyName;
-                ApplyPreviewFont(loaded);
-                _fontLabel.Text = loaded.DisplayName + "  ← " + _pendingFontFile;
+                fileName = dialog.FileName;
             }
+
+            TryApplyFontFile(fileName);
+        }
+
+        /// <summary>
+        /// 加载并预览一个字体文件。任何失败都只影响这一次选择：窗口保持原样、pending 状态不变。
+        /// 走得通的两条入口：文件对话框（选择字体文件…）和把字体文件拖进窗口。
+        /// </summary>
+        private void TryApplyFontFile(string fileName)
+        {
+            try
+            {
+                TryApplyFontFileCore(fileName);
+            }
+            catch (Exception ex)
+            {
+                // 最后一道兜底：任何意外都只弹提示，不让整个程序崩掉。
+                AppLogger.Error("界面字体：处理 " + fileName + " 时出错 → " + ex);
+                MessageBox.Show(
+                    this,
+                    "换字体时出错，已保留原来的字体：\r\n\r\n" + ex.Message,
+                    "字体不可用",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+        }
+
+        private void TryApplyFontFileCore(string fileName)
+        {
+            AppLogger.Info("界面字体：用户选择 " + fileName);
+
+            UiFontSet loaded;
+            try
+            {
+                // LoadFile 内部先做结构校验（非字体/截断文件在这一步就会被挡住），
+                // 只有通过校验才会真正调用 GDI+ 的 AddFontFile。
+                loaded = UiFontSet.LoadFile(fileName);
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Warn("界面字体：这个文件用不了 " + fileName + " → " + ex.Message);
+                MessageBox.Show(
+                    this,
+                    "这个字体文件用不了：\r\n\r\n" + ex.Message,
+                    "字体不可用",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
+            var storable = UiFontSet.MakeStorablePath(fileName, _baseDirectory);
+
+            // 先预览，成功后才改 pending 状态：失败时窗口保持原样，不会留下半套配置。
+            try
+            {
+                ApplyPreviewFont(loaded);
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Warn("界面字体：预览失败 " + fileName + " → " + ex.Message);
+                MessageBox.Show(
+                    this,
+                    "预览这个字体时出错，已保留原来的字体：\r\n\r\n" + ex.Message,
+                    "字体不可用",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
+            _pendingFontFile = storable;
+            _pendingFontFamily = loaded.FamilyName;
+            _fontLabel.Text = loaded.DisplayName + "  ← " + storable;
+        }
+
+        private void OnFontFileDragEnter(object? sender, DragEventArgs e)
+        {
+            e.Effect = DragDropEffects.None;
+            if (e.Data != null && e.Data.GetDataPresent(DataFormats.FileDrop))
+            {
+                var files = e.Data.GetData(DataFormats.FileDrop) as string[];
+                if (files != null && files.Length == 1 && IsFontFileName(files[0]))
+                {
+                    e.Effect = DragDropEffects.Copy;
+                }
+            }
+        }
+
+        private void OnFontFileDragDrop(object? sender, DragEventArgs e)
+        {
+            if (e.Data == null || !e.Data.GetDataPresent(DataFormats.FileDrop))
+            {
+                return;
+            }
+
+            var files = e.Data.GetData(DataFormats.FileDrop) as string[];
+            if (files == null || files.Length != 1 || !IsFontFileName(files[0]))
+            {
+                return;
+            }
+
+            TryApplyFontFile(files[0]);
+        }
+
+        private static bool IsFontFileName(string path)
+        {
+            var extension = Path.GetExtension(path) ?? string.Empty;
+            return extension.Equals(".ttf", StringComparison.OrdinalIgnoreCase)
+                   || extension.Equals(".otf", StringComparison.OrdinalIgnoreCase)
+                   || extension.Equals(".ttc", StringComparison.OrdinalIgnoreCase);
         }
 
         private void ResetFontToDefault()
         {
             _pendingFontFile = null;
             _pendingFontFamily = null;
-            ApplyPreviewFont(UiFontSet.Default);
+            try
+            {
+                ApplyPreviewFont(UiFontSet.Default);
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Warn("界面字体：恢复默认字体预览失败 → " + ex.Message);
+            }
+
             _fontLabel.Text = UiFontSet.Default.DisplayName;
         }
 

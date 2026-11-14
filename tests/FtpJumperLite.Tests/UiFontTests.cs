@@ -225,6 +225,63 @@ namespace FtpJumperLite.Tests
             });
         }
 
+        // ---------- 结构校验：防止 GDI+ 在原生层把进程搞崩 ----------
+
+        [Fact]
+        public void ValidateFontFile_AcceptsRealFont()
+        {
+            Assert.True(UiFontSet.ValidateFontFile(FindSystemFontFile(), out var error), error);
+            Assert.Equal(string.Empty, error);
+        }
+
+        [Fact]
+        public void ValidateFontFile_AcceptsFontCollection()
+        {
+            var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+            var ttc = Path.Combine(windows, "Fonts", "msyh.ttc");
+            if (!File.Exists(ttc))
+            {
+                return; // 这台机器没有 .ttc 字体，跳过。
+            }
+
+            // .ttc 是"字体集合"：文件头不是普通表目录，但 GDI+ 的 AddFontFile 能直接加载，
+            // 所以校验要放行，不能像我一开始那样把它当坏文件拒掉。
+            Assert.True(UiFontSet.ValidateFontFile(ttc, out var error), error);
+
+            var set = UiFontSet.LoadFile(ttc);
+            Assert.True(set.IsCustom);
+            Assert.False(string.IsNullOrEmpty(set.FamilyName));
+        }
+
+        [Fact]
+        public void ValidateFontFile_RejectsGarbageAndTruncatedFiles()
+        {
+            // 不是字体：文件头对不上（要有 256 字节以上，才不会先被"太小"拦下）
+            var junk = Path.Combine(_dir, "junk.ttf");
+            File.WriteAllText(junk, new string('A', 400));
+            Assert.False(UiFontSet.ValidateFontFile(junk, out var junkError));
+            Assert.Contains("不是 TrueType", junkError);
+
+            // 太小
+            var tiny = Path.Combine(_dir, "tiny.ttf");
+            File.WriteAllBytes(tiny, new byte[10]);
+            Assert.False(UiFontSet.ValidateFontFile(tiny, out var tinyError));
+            Assert.Contains("太小", tinyError);
+
+            // 截断的真实字体：表目录会指到文件末尾之外
+            var source = File.ReadAllBytes(FindSystemFontFile());
+            var truncated = Path.Combine(_dir, "truncated.ttf");
+            var head = new byte[400];
+            Array.Copy(source, head, head.Length);
+            File.WriteAllBytes(truncated, head);
+            Assert.False(UiFontSet.ValidateFontFile(truncated, out var truncatedError));
+            Assert.False(string.IsNullOrEmpty(truncatedError));
+
+            // 文件不存在
+            Assert.False(UiFontSet.ValidateFontFile(Path.Combine(_dir, "missing.ttf"), out var missingError));
+            Assert.Contains("找不到", missingError);
+        }
+
         private string CopySystemFont(string fileName)
         {
             var source = FindSystemFontFile();

@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Drawing.Text;
 using System.IO;
 using FtpJumperLite.Models;
+using FtpJumperLite.Services;
 
 namespace FtpJumperLite.Ui
 {
@@ -129,7 +130,139 @@ namespace FtpJumperLite.Ui
                 throw new FileNotFoundException("找不到字体文件：" + full, full);
             }
 
+            // 先做结构校验：GDI+ 的 PrivateFontCollection 遇到损坏/不支持的字体时，
+            // 有可能直接在原生代码里崩掉整个进程（托管 try/catch 拦不住），必须先挡在门外。
+            if (!ValidateFontFile(full, out var problem))
+            {
+                throw new InvalidOperationException(problem);
+            }
+
             return LoadPrivate(full);
+        }
+
+        /// <summary>
+        /// 字体文件的结构校验（只看文件头与表目录，不碰 GDI+，所以本身不会崩）。
+        /// 拒绝：非字体文件、字体集合（.ttc，PrivateFontCollection 不支持）、表目录越界的截断文件。
+        /// </summary>
+        public static bool ValidateFontFile(string fullPath, out string error)
+        {
+            error = string.Empty;
+
+            long length;
+            byte[] header;
+            try
+            {
+                var info = new FileInfo(fullPath);
+                if (!info.Exists)
+                {
+                    error = "找不到字体文件：" + fullPath;
+                    return false;
+                }
+
+                length = info.Length;
+                if (length < 256)
+                {
+                    error = "文件太小，不像是字体文件（" + length + " 字节）。";
+                    return false;
+                }
+
+                using (var stream = File.OpenRead(fullPath))
+                {
+                    header = new byte[4];
+                    if (stream.Read(header, 0, header.Length) != header.Length)
+                    {
+                        error = "读不到文件头。";
+                        return false;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                error = "读不了这个文件：" + ex.Message;
+                return false;
+            }
+
+            var tag = ((uint)header[0] << 24) | ((uint)header[1] << 16) | ((uint)header[2] << 8) | header[3];
+
+            // 'ttcf'：字体集合（.ttc）。GDI+ 的 AddFontFile 能直接吃（实测 msyh.ttc 可加载出 2 个家族），
+            // 所以放行；它的文件头不是普通表目录，后面那段检查跳过。
+            if (tag == 0x74746366)
+            {
+                return true;
+            }
+
+            var known = tag == 0x00010000 // TrueType
+                        || tag == 0x4F54544F // 'OTTO'：OpenType/CFF
+                        || tag == 0x74727565 // 'true'
+                        || tag == 0x74797031; // 'typ1'
+            if (!known)
+            {
+                error = "不是 TrueType/OpenType 字体（文件头 0x" + tag.ToString("X8") + "）。";
+                return false;
+            }
+
+            // 表目录边界检查：数量合理，且每张表的 [offset, offset+length) 都落在文件内。
+            try
+            {
+                using (var stream = File.OpenRead(fullPath))
+                using (var reader = new BinaryReader(stream))
+                {
+                    stream.Position = 4;
+                    var numTables = ReadBigEndianUInt16(reader);
+                    if (numTables == 0 || numTables > 512)
+                    {
+                        error = "字体表数量异常（" + numTables + "）。";
+                        return false;
+                    }
+
+                    if (12L + (12L * numTables) > length)
+                    {
+                        error = "字体文件不完整（表目录越界）。";
+                        return false;
+                    }
+
+                    for (var i = 0; i < numTables; i++)
+                    {
+                        stream.Position = 12L + (16L * i) + 8L; // tag(4) + checksum(4) → offset(4) + length(4)
+                        var offset = ReadBigEndianUInt32(reader);
+                        var size = ReadBigEndianUInt32(reader);
+                        if (offset > length || (long)offset + size > length + 4)
+                        {
+                            error = "字体数据越界（第 " + (i + 1) + " 张表超出文件末尾），文件可能已损坏。";
+                            return false;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                error = "字体结构校验失败：" + ex.Message;
+                return false;
+            }
+
+            return true;
+        }
+
+        private static ushort ReadBigEndianUInt16(BinaryReader reader)
+        {
+            var bytes = reader.ReadBytes(2);
+            if (bytes.Length != 2)
+            {
+                throw new EndOfStreamException();
+            }
+
+            return (ushort)((bytes[0] << 8) | bytes[1]);
+        }
+
+        private static uint ReadBigEndianUInt32(BinaryReader reader)
+        {
+            var bytes = reader.ReadBytes(4);
+            if (bytes.Length != 4)
+            {
+                throw new EndOfStreamException();
+            }
+
+            return ((uint)bytes[0] << 24) | ((uint)bytes[1] << 16) | ((uint)bytes[2] << 8) | bytes[3];
         }
 
         /// <summary>创建字体；家族没有该字重时退回 Regular（私有字体常见只有单一字重）。</summary>
@@ -224,6 +357,11 @@ namespace FtpJumperLite.Ui
                 var collection = new PrivateFontCollection();
                 try
                 {
+                    // 先把"要加载哪个文件"写进日志：万一 GDI+ 在原生层崩掉进程，
+                    // 日志里至少能看到它死在哪个文件上（这是唯一能留下的线索）。
+                    var fileSize = new FileInfo(fullPath).Length;
+                    AppLogger.Info("界面字体：开始加载 " + fullPath + "（" + fileSize + " 字节）");
+
                     collection.AddFontFile(fullPath);
                     if (collection.Families.Length == 0)
                     {
@@ -232,10 +370,12 @@ namespace FtpJumperLite.Ui
 
                     var set = new UiFontSet(collection.Families[0], collection, fullPath, null);
                     Cache["file:" + fullPath] = set;
+                    AppLogger.Info("界面字体：加载成功 " + set.FamilyName);
                     return set;
                 }
-                catch
+                catch (Exception ex)
                 {
+                    AppLogger.Warn("界面字体：加载失败 " + fullPath + " → " + ex.GetType().Name + "：" + ex.Message);
                     collection.Dispose();
                     throw;
                 }
