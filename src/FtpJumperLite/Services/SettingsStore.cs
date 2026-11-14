@@ -3,6 +3,7 @@ using System.IO;
 using System.Text;
 using FtpJumperLite.Models;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace FtpJumperLite.Services
 {
@@ -54,7 +55,27 @@ namespace FtpJumperLite.Services
                     return false;
                 }
 
-                var parsed = JsonConvert.DeserializeObject<UiSettings>(text);
+                // 容错反序列化：
+                //  1) 先严格解析（语法错误、字段类型错误都会在这里暴露）；
+                //  2) 失败时只针对"palette 写成了非对象"这一类常见错误做一次清理重试 ——
+                //     不能让 palette 的一个笔误把主题/字号/字体全部作废（现场就是这个问题）；
+                //  3) 语法坏到不能解析的文件（JObject.Parse 也会抛）仍然如实报错。
+                UiSettings? parsed;
+                try
+                {
+                    parsed = JsonConvert.DeserializeObject<UiSettings>(text);
+                }
+                catch (JsonException)
+                {
+                    var root = JObject.Parse(text);
+                    if (!TryCleanPalette(root))
+                    {
+                        throw;
+                    }
+
+                    parsed = root.ToObject<UiSettings>();
+                }
+
                 if (parsed == null)
                 {
                     error = "settings.json 里没有设置对象，已使用默认设置。";
@@ -80,6 +101,40 @@ namespace FtpJumperLite.Services
                 error = "无法读取 settings.json：" + ex.Message;
                 return false;
             }
+        }
+
+        /// <summary>
+        /// 把 palette 里"不是对象"的坏字段摘掉（palette 本身、以及它的 light/dark/custom 三个子项）。
+        /// 返回是否真的改动了内容（没改动说明是别的错误，交回上层照常报错）。
+        /// </summary>
+        private static bool TryCleanPalette(JObject root)
+        {
+            var cleaned = false;
+            var palette = root["palette"];
+            if (palette != null && palette.Type != JTokenType.Object && palette.Type != JTokenType.Null)
+            {
+                root.Remove("palette");
+                AppLogger.Warn("settings.json：palette 应当写成对象，已忽略这一项（其余设置照常生效）。");
+                return true;
+            }
+
+            if (!(palette is JObject paletteObject))
+            {
+                return false;
+            }
+
+            foreach (var name in new[] { "light", "dark", "custom" })
+            {
+                var child = paletteObject[name];
+                if (child != null && child.Type != JTokenType.Object && child.Type != JTokenType.Null)
+                {
+                    paletteObject.Remove(name);
+                    AppLogger.Warn("settings.json：palette." + name + " 应当写成对象，已忽略这一项。");
+                    cleaned = true;
+                }
+            }
+
+            return cleaned;
         }
 
         /// <summary>原子写回（先写临时文件再替换）。</summary>

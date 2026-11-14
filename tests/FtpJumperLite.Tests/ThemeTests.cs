@@ -315,6 +315,41 @@ namespace FtpJumperLite.Tests
             Assert.True(dark.Accent.R > dark.Accent.G, "强调色应仍是洋红系：" + ColorText.ToText(dark.Accent));
         }
 
+        // ---------- settings.json 的容错 ----------
+
+        [Fact]
+        public void SettingsStore_SkipsMalformedPaletteInsteadOfFailingWholeFile()
+        {
+            // 现场的错误写法：palette 的三个子项写成了字符串（应当写成对象）。
+            // 以前这一处会让整份 settings.json 读取失败 → theme/字号/字体全部回落到默认值。
+            var path = Path.Combine(_dir, "settings-odd.json");
+            File.WriteAllText(
+                path,
+                "{\"version\":1,\"theme\":\"custom\",\"fontScale\":130,\"palette\":{\"light\":\"\",\"dark\":\"\",\"custom\":\"#AABBCC\"},\"fontFamily\":\"BlueakaBetaGBK DemiBold\"}");
+
+            var store = new SettingsStore(path);
+            Assert.True(store.TryLoad(out var settings, out var error), error);
+
+            Assert.Equal("custom", settings.Theme);
+            Assert.Equal(130, settings.FontScale);
+            Assert.Equal("BlueakaBetaGBK DemiBold", settings.FontFamily);
+            // 坏的 palette 整个被跳过（子项类型不对），但不能影响其它设置
+            Assert.True(settings.Palette?.Custom == null || settings.Palette.Custom.IsEmpty);
+        }
+
+        [Fact]
+        public void SettingsStore_HardBrokenJsonStillReportsFailure()
+        {
+            // 语法坏到不能解析时仍然要返回 false（由界面提示"读取失败，保持原设置"），
+            // 而不是悄悄当默认值用。
+            var path = Path.Combine(_dir, "settings-broken.json");
+            File.WriteAllText(path, "{ \"theme\": \"custom\", ");
+
+            var store = new SettingsStore(path);
+            Assert.False(store.TryLoad(out _, out var error));
+            Assert.False(string.IsNullOrEmpty(error));
+        }
+
         // ---------- 新增科目（字段级表单的保存路径） ----------
 
         [Fact]

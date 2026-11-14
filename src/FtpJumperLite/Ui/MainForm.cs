@@ -78,6 +78,7 @@ namespace FtpJumperLite.Ui
         private readonly SettingsStore _settingsStore;
         private readonly Timer _settingsReloadTimer;
         private UiSettings _settings;
+        private string? _settingsLoadError;
         private FileSystemWatcher? _settingsWatcher;
         private bool _isDark;
         private readonly TableLayoutPanel _root;
@@ -218,7 +219,12 @@ namespace FtpJumperLite.Ui
             _subjectList.SubjectContextRequested += (_, e) => ShowSubjectMenu(e.Subject, e.ScreenLocation);
             _root.Controls.Add(_subjectList, 0, 1);
 
-            _btnRefresh = MakeBottomButton("刷新配置", (_, _) => ReloadSubjects());
+            // 刷新配置 = 科目 + 设置都重新读一遍（以前只重读科目，改完 settings.json 点它没反应）。
+            _btnRefresh = MakeBottomButton("刷新配置", (_, _) =>
+            {
+                ReloadSettingsFromUserClick();
+                ReloadSubjects();
+            });
             _btnOpenConfig = MakeBottomButton("打开配置目录", OpenConfigDirectory);
             _btnQuit = MakeBottomButton("退出", (_, _) => Close());
 
@@ -260,6 +266,10 @@ namespace FtpJumperLite.Ui
             BackColor = _palette.FormBack;
 
             _statusLabel.Text = "就绪：单击科目 = 直接打开该科目的 FTP 网址；修改配置后请点「刷新配置」。";
+            if (_settingsLoadError != null)
+            {
+                _statusLabel.Text = "settings.json 读取失败，已用默认设置：" + _settingsLoadError;
+            }
             ReloadSubjects();
 
             // 启动时也要把 fontScale 套到标题区按钮上：构造时按不带缩放的中性尺寸建的控件，
@@ -428,14 +438,18 @@ namespace FtpJumperLite.Ui
         {
             if (_settingsStore.TryLoad(out var settings, out var error))
             {
+                _settingsLoadError = null;
                 AppLogger.Info("已加载设置：theme=" + settings.Theme
                                + " fontScale=" + settings.FontScale
                                + " 自定义调色板=" + (settings.Palette?.Custom != null && !settings.Palette.Custom.IsEmpty));
                 return settings;
             }
 
-            AppLogger.Warn("设置读取失败，先用默认设置：" + error);
-            return UiSettings.CreateDefault();
+            // 读不出来就**保持当前设置不变**：以前这里返回默认值，界面会当场"变回默认"，
+            // 看起来就像自己改好的配置被默认值覆盖了。
+            _settingsLoadError = error ?? "settings.json 读取失败。";
+            AppLogger.Warn("设置读取失败，保持原设置：" + _settingsLoadError);
+            return _settings ?? UiSettings.CreateDefault();
         }
 
         /// <summary>按当前的 settings + 系统深浅色解析出调色板，并记录最终选了哪一侧。</summary>
@@ -454,13 +468,40 @@ namespace FtpJumperLite.Ui
         /// <summary>settings.json 被外部改动后重新加载并立即生效（不重启）。</summary>
         private void ReloadSettings()
         {
+            ReloadSettingsCore(false);
+        }
+
+        /// <summary>用户主动点「刷新配置」：设置读失败时弹一次提示（自动重载只更新状态栏）。</summary>
+        private void ReloadSettingsFromUserClick()
+        {
+            ReloadSettingsCore(true);
+        }
+
+        private void ReloadSettingsCore(bool showProblems)
+        {
             if (IsDisposed)
             {
                 return;
             }
 
+            // 读取失败时 LoadSettings 会保留"当前生效的设置"，不会把界面重置成默认值。
             _settings = LoadSettings();
             ApplySettings();
+
+            if (_settingsLoadError != null)
+            {
+                _statusLabel.Text = "settings.json 读取失败，已保持原设置不变：" + _settingsLoadError;
+                if (showProblems)
+                {
+                    MessageBox.Show(
+                        this,
+                        _settingsLoadError + "\r\n\r\n已保持当前设置不变，没有改写文件。\r\n"
+                        + "改好 settings.json 后再点「刷新配置」即可；在设置窗口点「确定」才会写回（原文件会先备份成 settings.json.bak）。",
+                        "settings.json 读取失败",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                }
+            }
         }
 
         /// <summary>把当前设置整体套到界面上（配色 + 字号 + 标题栏）。</summary>
