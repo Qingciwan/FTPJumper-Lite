@@ -1261,30 +1261,98 @@ namespace FtpJumperLite.Ui
 
         private void OpenConfigDirectory(object? sender, EventArgs e)
         {
+            var dir = Path.GetDirectoryName(_configPath);
+            if (string.IsNullOrEmpty(dir))
+            {
+                dir = ".";
+            }
+
+            string? firstError = null;
             try
             {
-                var dir = Path.GetDirectoryName(_configPath);
-                if (string.IsNullOrEmpty(dir))
+                Directory.CreateDirectory(dir);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "配置目录不可用：" + ex.Message, "打开配置目录", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            // 首选：让 Shell 打开这个目录（交给已经在跑的资源管理器，**不新起 explorer.exe 进程**）。
+            // 直接 Process.Start("explorer.exe", …) 在部分机器上会因第三方注入的 DLL 初始化失败，
+            // 报 0xC0000142「应用程序无法正常启动」——现场就是这样。
+            if (TryOpenWithShell(dir, out firstError))
+            {
+                return;
+            }
+
+            // 退路：仍然是 explorer.exe /select（能选中配置文件更好），不行再说一声。
+            string? selectError = null;
+            if (File.Exists(_configPath) && TryStartExplorer("/select,\"" + _configPath + "\"", out selectError))
+            {
+                return;
+            }
+
+            string? plainError = null;
+            if (TryStartExplorer("\"" + dir + "\"", out plainError))
+            {
+                return;
+            }
+
+            AppLogger.Warn("打开配置目录失败：" + dir + "（shell：" + firstError + "；explorer：" + (plainError ?? selectError) + "）");
+            MessageBox.Show(
+                this,
+                "没能自动打开资源管理器，请手动打开这个文件夹：\r\n\r\n" + dir,
+                "打开配置目录",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+
+        /// <summary>让 Shell 打开一个目录（内部走 ShellExecuteEx，不新建 explorer.exe 进程）。</summary>
+        private static bool TryOpenWithShell(string directory, out string? error)
+        {
+            error = null;
+            try
+            {
+                var psi = new ProcessStartInfo
                 {
-                    dir = ".";
+                    FileName = directory,
+                    UseShellExecute = true,
+                    Verb = "open"
+                };
+                using (Process.Start(psi))
+                {
                 }
 
-                Directory.CreateDirectory(dir);
-                var args = File.Exists(_configPath)
-                    ? "/select,\"" + _configPath + "\""
-                    : "\"" + dir + "\"";
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.GetType().Name + "：" + ex.Message;
+                return false;
+            }
+        }
+
+        private static bool TryStartExplorer(string arguments, out string? error)
+        {
+            error = null;
+            try
+            {
                 using (Process.Start(new ProcessStartInfo
                 {
                     FileName = "explorer.exe",
-                    Arguments = args,
+                    Arguments = arguments,
                     UseShellExecute = true
                 }))
                 {
                 }
+
+                return true;
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "无法打开配置目录：" + ex.Message, "FtpJumper Lite", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                error = ex.GetType().Name + "：" + ex.Message;
+                return false;
             }
         }
 
