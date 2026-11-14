@@ -68,11 +68,15 @@ namespace FtpJumperLite.Ui
                 // 自定义主题：写一侧，另一侧按语义角色推导（这就是"自定义主题允许浅深互转"）。
                 if (overrides.Custom != null && !overrides.Custom.IsEmpty)
                 {
-                    var given = UiPalette.Light();
+                    // 关键：先判断这套自定义颜色是"浅色系"还是"深色系"，再挑对应的内置调色板打底。
+                    // 一律用浅色打底的话，深色自定义只写几个键时，剩下的键会混进浅色默认值
+                    // （深色卡片配浅色描边），看起来就是"深色主题花了"。
+                    var customIsDark = DetectCustomIsDark(overrides.Custom);
+                    var given = customIsDark == true ? UiPalette.Dark() : UiPalette.Light();
                     Apply(given, overrides.Custom, ref note);
                     var other = ThemeDeriver.DeriveCounterpart(given);
 
-                    if (ThemeDeriver.IsDarkish(given))
+                    if (customIsDark == true)
                     {
                         dark = given;
                         light = other;
@@ -97,6 +101,29 @@ namespace FtpJumperLite.Ui
             var mode = (settings?.Theme ?? "system").Trim().ToLowerInvariant();
             isDark = mode == "dark" || ((mode == "system" || mode == "custom") && systemDark);
             return isDark ? set.Dark : set.Light;
+        }
+
+        /// <summary>
+        /// 判断"自定义调色板"属于哪一侧：优先看 cardBack，其次 formBack，再看 titleText（字亮 = 深色主题）。
+        /// 都没写（比如只改强调色）时返回 null，按浅色处理。
+        /// </summary>
+        private static bool? DetectCustomIsDark(ThemeColors custom)
+        {
+            foreach (var text in new[] { custom.CardBack, custom.FormBack })
+            {
+                if (!string.IsNullOrWhiteSpace(text) && ColorText.TryParse(text!, out var color))
+                {
+                    return ThemeDeriver.RelativeLuminance(color) < 0.5;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(custom.TitleText) && ColorText.TryParse(custom.TitleText!, out var title))
+            {
+                // 文字偏亮 → 深色主题
+                return ThemeDeriver.RelativeLuminance(title) > 0.5;
+            }
+
+            return null;
         }
 
         /// <summary>把 ThemeColors 里写到的键覆盖到调色板上；写错的颜色忽略并累积提示。</summary>

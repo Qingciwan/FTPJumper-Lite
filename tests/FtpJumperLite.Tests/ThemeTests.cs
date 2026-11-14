@@ -264,6 +264,57 @@ namespace FtpJumperLite.Tests
             Assert.Null(config.Subjects[1].ColorHex);
             Assert.Null(config.Subjects[1].Texture);
         }
+        [Fact]
+        public void ThemeResolver_CustomDarkPartial_UsesDarkDefaultsForUnspecifiedKeys()
+        {
+            // 只写 3 个键的深色自定义主题：没写到的键必须取"深色"默认值。
+            // 之前的实现一律拿内置浅色打底，于是深色卡片会配浅色描边/悬停色（看起来"花"）。
+            var settings = UiSettings.CreateDefault();
+            settings.Theme = "custom";
+            settings.Palette = new PaletteOverrides
+            {
+                Custom = new ThemeColors { FormBack = "#1E1E1E", CardBack = "#2B2B2B", TitleText = "#F0F0F0" }
+            };
+
+            var dark = ThemeResolver.Resolve(settings, true, out var isDark, out _);
+
+            Assert.True(isDark);
+            Assert.Equal("#2B2B2B", ColorText.ToText(dark.CardBack));
+            Assert.True(
+                ThemeDeriver.RelativeLuminance(dark.CardBorder) < 0.5,
+                "cardBorder 应取深色默认值，实际 " + ColorText.ToText(dark.CardBorder));
+            Assert.True(
+                ThemeDeriver.RelativeLuminance(dark.CardHover) < 0.5,
+                "cardHover 应取深色默认值，实际 " + ColorText.ToText(dark.CardHover));
+            Assert.True(
+                ThemeDeriver.RelativeLuminance(dark.ScrollThumb) < 0.5,
+                "scrollThumb 应取深色默认值，实际 " + ColorText.ToText(dark.ScrollThumb));
+            Assert.True(ThemeDeriver.ContrastRatio(dark.TitleText, dark.CardBack) >= 4.5);
+        }
+
+        [Fact]
+        public void ThemeResolver_CustomLightPartial_KeepsLightDefaultsAndDerivesDarkSide()
+        {
+            var settings = UiSettings.CreateDefault();
+            settings.Theme = "custom";
+            settings.Palette = new PaletteOverrides
+            {
+                Custom = new ThemeColors { CardBack = "#FFFFFF", TitleText = "#101010", Accent = "#C2185B" }
+            };
+
+            var light = ThemeResolver.Resolve(settings, false, out var isDark, out _);
+            Assert.False(isDark);
+            Assert.Equal("#FFFFFF", ColorText.ToText(light.CardBack));
+            Assert.Equal("#C2185B", ColorText.ToText(light.Accent));
+            Assert.True(ThemeDeriver.RelativeLuminance(light.CardBorder) > 0.5, "浅色打底时没写的键仍是浅色默认值");
+
+            var dark = ThemeResolver.Resolve(settings, true, out var darkIsDark, out _);
+            Assert.True(darkIsDark);
+            Assert.True(ThemeDeriver.IsDarkish(dark));
+            Assert.True(ThemeDeriver.ContrastRatio(dark.TitleText, dark.CardBack) >= 4.5);
+            Assert.True(dark.Accent.R > dark.Accent.G, "强调色应仍是洋红系：" + ColorText.ToText(dark.Accent));
+        }
+
         // ---------- 新增科目（字段级表单的保存路径） ----------
 
         [Fact]

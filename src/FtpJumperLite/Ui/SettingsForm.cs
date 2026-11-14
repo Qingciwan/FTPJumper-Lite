@@ -58,7 +58,25 @@ namespace FtpJumperLite.Ui
             _dark = MakeRadio("深色", y);
             y += S(28);
             _custom = MakeRadio("自定义调色板（写在 palette.custom）", y);
-            y += S(40);
+            y += S(30);
+
+            // palette.custom 还是空的时候选「自定义」不会有任何变化，这里直接说清楚，免得以为设置没生效。
+            var customPalette = _original.Palette?.Custom;
+            if (customPalette == null || customPalette.IsEmpty)
+            {
+                var hint = new Label
+                {
+                    Left = S(24),
+                    Top = y,
+                    AutoSize = true,
+                    MaximumSize = new Size(S(320), 0),
+                    ForeColor = _palette.SubText,
+                    BackColor = _palette.FormBack,
+                    Text = "（palette.custom 还是空的：选它目前和「跟随系统」一样，先在 settings.json 里写颜色）"
+                };
+                Controls.Add(hint);
+                y = hint.Bottom + S(10);
+            }
 
             // 标签单独一行、输入框在它下面 —— 之前两者用了同一个 Left/Top，会叠在一起。
             Controls.Add(MakeLabel("字号（60~200，100 = 默认）", y));
