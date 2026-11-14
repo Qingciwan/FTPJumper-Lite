@@ -612,8 +612,8 @@ namespace FtpJumperLite.Tests
                 MakeThreadDpiAware();
                 try
                 {
-                    using (var settings = new SettingsForm(UiSettings.CreateDefault(), UiPalette.Light(), 2F))
-                    using (var editor = new SubjectEditorForm(UiPalette.Light(), 2F, null))
+                    using (var settings = new SettingsForm(UiSettings.CreateDefault(), UiPalette.Light(), 2F, UiFontSet.Default, null))
+                    using (var editor = new SubjectEditorForm(UiPalette.Light(), 2F, UiFontSet.Default, null))
                     {
                         foreach (var form in new Form[] { settings, editor })
                         {
@@ -753,6 +753,202 @@ namespace FtpJumperLite.Tests
                     height <= rowHeight - 6,
                     "行高 " + rowHeight + " 放不下 " + fontSize + "pt 的两行中文（量得 " + height + "）");
             }
+        }
+
+        [Fact]
+        public void AddSubjectButton_FollowsSettingsAndRuntimePalette()
+        {
+            // 曾经的 bug："+" 只在构造时拿一次 Palette，之后 theme 改了也不跟，看起来"始终跟随系统"。
+            var configPath = Path.Combine(_dir, "palette.json");
+            File.WriteAllText(configPath, BuildConfigJson(3));
+            File.WriteAllText(
+                Path.Combine(_dir, "settings.json"),
+                "{\"version\":1,\"theme\":\"dark\",\"fontScale\":100}");
+
+            RunOnSta(() =>
+            {
+                using (var form = new MainForm(configPath))
+                {
+                    var add = GetPrivateField<Win11Button>(form, "_addSubjectButton");
+                    var gear = GetPrivateField<Win11Button>(form, "_gear");
+
+                    // 启动：settings.json 指定 dark，两个标题区按钮都应拿到同一份调色板。
+                    Assert.Same(form.Palette, add.Palette);
+                    Assert.Same(form.Palette, gear.Palette);
+
+                    // 运行时切换主题（等价于设置窗点确定 / settings.json 被外部改动）。
+                    form.Palette = UiPalette.Light();
+
+                    Assert.Same(form.Palette, add.Palette);
+                    Assert.Same(form.Palette, gear.Palette);
+                }
+            });
+        }
+
+        [Fact]
+        public void HeaderButtons_ScaleTogetherWithFontScale()
+        {
+            // "+" 与齿轮是同一对标题区按钮：fontScale 变化时尺寸/字号必须一起变，不能一大一小。
+            var dir100 = Path.Combine(_dir, "scale100");
+            var dir150 = Path.Combine(_dir, "scale150");
+            Directory.CreateDirectory(dir100);
+            Directory.CreateDirectory(dir150);
+
+            var config100 = Path.Combine(dir100, "subjects.json");
+            var config150 = Path.Combine(dir150, "subjects.json");
+            File.WriteAllText(config100, BuildConfigJson(3));
+            File.WriteAllText(config150, BuildConfigJson(3));
+            File.WriteAllText(Path.Combine(dir100, "settings.json"), "{\"version\":1,\"fontScale\":100}");
+            File.WriteAllText(Path.Combine(dir150, "settings.json"), "{\"version\":1,\"fontScale\":150}");
+
+            Size add100 = Size.Empty;
+            Size gear100 = Size.Empty;
+            Size add150 = Size.Empty;
+            Size gear150 = Size.Empty;
+            int minWidth100 = 0;
+            int minWidth150 = 0;
+
+            RunOnSta(() =>
+            {
+                using (var form = new MainForm(config100))
+                {
+                    add100 = GetPrivateField<Win11Button>(form, "_addSubjectButton").Size;
+                    gear100 = GetPrivateField<Win11Button>(form, "_gear").Size;
+                    minWidth100 = form.MinimumSize.Width;
+                }
+
+                using (var form = new MainForm(config150))
+                {
+                    add150 = GetPrivateField<Win11Button>(form, "_addSubjectButton").Size;
+                    gear150 = GetPrivateField<Win11Button>(form, "_gear").Size;
+                    minWidth150 = form.MinimumSize.Width;
+                }
+            });
+
+            Assert.Equal(add100, gear100);
+            Assert.Equal(add150, gear150);
+            Assert.True(
+                add150.Height > add100.Height,
+                "fontScale=150 时标题区按钮应变大（100%=" + add100.Height + "，150%=" + add150.Height + "）");
+
+            // 底栏按钮也随字号变大，窗口最小宽度必须跟着长，否则左侧按钮会被裁到客户区外。
+            Assert.True(
+                minWidth150 > minWidth100,
+                "fontScale=150 时最小窗口宽度应变大（100%=" + minWidth100 + "，150%=" + minWidth150 + "）");
+        }
+
+        [Fact]
+        public void DoubleClick_ActivatesOnlyOnce()
+        {
+            // 单击即打开，双击 = 两次 MouseDown/MouseUp；第二下必须被吞掉，否则会开出两个窗口。
+            var configPath = Path.Combine(_dir, "doubleclick.json");
+            File.WriteAllText(configPath, BuildConfigJson(2));
+            var subjects = LoadSubjects(configPath);
+
+            RunOnSta(() =>
+            {
+                using (var list = new SubjectListControl { DpiScale = 1.5F, Subjects = subjects })
+                {
+                    list.ClientSize = new Size(700, 900);
+                    list.RelayoutNow();
+
+                    var activated = 0;
+                    list.SubjectActivated += (_, _) => activated++;
+
+                    var row = list.GetRowBounds(0);
+                    // X 必须落在卡片内（左侧内边距之外），否则命中的是空白区。
+                    var point = new Point(row.Left + 10, (row.Top + row.Bottom) / 2);
+
+                    InvokeMouse(list, "OnMouseDown", new MouseEventArgs(MouseButtons.Left, 1, point.X, point.Y, 0));
+                    InvokeMouse(list, "OnMouseUp", new MouseEventArgs(MouseButtons.Left, 1, point.X, point.Y, 0));
+                    InvokeMouse(list, "OnMouseDown", new MouseEventArgs(MouseButtons.Left, 2, point.X, point.Y, 0));
+                    InvokeMouse(list, "OnMouseUp", new MouseEventArgs(MouseButtons.Left, 2, point.X, point.Y, 0));
+
+                    Assert.Equal(1, activated);
+                }
+            });
+        }
+
+        [Fact]
+        public void DuplicateLaunch_IsSuppressedOnlyWithinWindow()
+        {
+            var method = typeof(MainForm).GetMethod(
+                "IsDuplicateLaunch",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.NotNull(method);
+
+            var windowField = typeof(MainForm).GetField(
+                "DuplicateLaunchWindowMs",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.NotNull(windowField);
+            var window = (int)windowField!.GetValue(null)!;
+
+            Func<string?, long, string, long, bool> isDuplicate = (lastUrl, lastTicks, url, now) =>
+                (bool)method!.Invoke(null, new object?[] { lastUrl, lastTicks, url, now })!;
+
+            Assert.False(isDuplicate(null, 0, "ftp://a/", 500));
+            Assert.False(isDuplicate("ftp://a/", 1000, "ftp://b/", 1200));
+            Assert.True(isDuplicate("ftp://a/", 1000, "ftp://a/", 1200));
+            Assert.False(isDuplicate("ftp://a/", 1000, "ftp://a/", 1000 + window));
+        }
+
+        [Fact]
+        public void InvalidConfig_DoesNotBlockConstruction()
+        {
+            // 回归：启动阶段配置读不出来时，构造 MainForm 绝不能弹模态框等用户点击
+            // （以前测试跑"空科目"用例时会卡在 MessageBox 上，无人值守时就是永久挂起）。
+            var configPath = Path.Combine(_dir, "empty-subjects.json");
+            File.WriteAllText(configPath, BuildConfigJson(0));
+
+            RunOnSta(() =>
+            {
+                using (var form = new MainForm(configPath))
+                {
+                    var label = GetPrivateField<ToolStripStatusLabel>(form, "_statusLabel");
+                    Assert.Contains("配置读取失败", label.Text);
+
+                    // 提示被推迟到 OnShown，而不是在构造里直接弹。
+                    var pending = typeof(MainForm).GetField(
+                        "_pendingConfigError",
+                        BindingFlags.Instance | BindingFlags.NonPublic);
+                    Assert.NotNull(pending);
+                    Assert.NotNull(pending!.GetValue(form));
+                }
+            });
+        }
+
+        private static void RunOnSta(Action action)
+        {
+            Exception? failure = null;
+            var thread = new Thread(() =>
+            {
+                MakeThreadDpiAware();
+                try
+                {
+                    action();
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            thread.Join();
+
+            Assert.True(failure == null, "STA 线程里执行失败：" + failure);
+        }
+
+        private static void InvokeMouse(Control control, string methodName, MouseEventArgs args)
+        {
+            var method = typeof(Control).GetMethod(
+                methodName,
+                BindingFlags.Instance | BindingFlags.NonPublic,
+                null,
+                new[] { typeof(MouseEventArgs) },
+                null);
+            Assert.NotNull(method);
+            method!.Invoke(control, new object[] { args });
         }
 
         private static string BuildConfigJson(int count)

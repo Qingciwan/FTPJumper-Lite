@@ -91,11 +91,21 @@ namespace FtpJumperLite.Ui
         private readonly Win11Button _btnQuit;
         private readonly ToolStripStatusLabel _statusLabel;
         private UiPalette _palette = UiPalette.Light();
+        private UiFontSet _fonts = UiFontSet.Default;
         private List<Subject> _subjects = new List<Subject>();
         private float _dpiScale = 1F;
 
+        /// <summary>同一网址在这个窗口期内重复触发只打开一次（双击 / 连点 / 按住回车）。</summary>
+        internal const int DuplicateLaunchWindowMs = 1000;
+
+        private string? _lastLaunchUrl;
+        private long _lastLaunchTicks;
+
         /// <summary>构造函数是否已跑完；在此之前任何字段都可能还是 null，禁止按 DPI 缩放。</summary>
         private bool _layoutReady;
+
+        /// <summary>启动阶段配置读取失败时先记下来，等窗口显示后再弹窗（构造期间弹模态会卡住测试/自动化）。</summary>
+        private string? _pendingConfigError;
 
         public MainForm(string? configPath)
         {
@@ -116,7 +126,14 @@ namespace FtpJumperLite.Ui
             AutoScaleMode = AutoScaleMode.None;
             _dpiScale = CurrentDpiScale();
 
-            Font = new Font("Microsoft YaHei UI", 11F);
+            // 界面字体：settings.json 的 fontFile（未安装字体）/ fontFamily；失败自动回退并记日志。
+            _fonts = UiFontSet.Load(_settings, _configPath);
+            if (!string.IsNullOrEmpty(_fonts.Note))
+            {
+                AppLogger.Warn("界面字体：" + _fonts.Note);
+            }
+
+            Font = _fonts.Create(11F);
             Text = "课堂资料助手 Lite · FtpJumper";
             StartPosition = FormStartPosition.CenterScreen;
 
@@ -136,8 +153,8 @@ namespace FtpJumperLite.Ui
             defaultWidth = Math.Min(defaultWidth, workArea.Width - Scale(DefaultFormSideMarginLogical));
             defaultWidth = Math.Min(Scale(DefaultFormMaxWidthLogical), Math.Max(Scale(DefaultFormMinWidthLogical), defaultWidth));
             Size = new Size(defaultWidth, defaultHeight);
-            // 最小宽度必须能完整容纳底部三个按钮（各 120 + 间距 + 边距），否则会被裁到窗口外。
-            MinimumSize = new Size(Scale(MinFormWidthLogical), Scale(MinFormHeightLogical));
+            // 最小宽度必须能完整容纳底部三个按钮（尺寸随 fontScale 放大），否则会被裁到窗口外。
+            UpdateMinimumSize();
 
             _root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4 };
             // 列必须固定占满整宽，否则列会按内容 AutoSize、把整行撑得比窗口还宽。
@@ -232,7 +249,8 @@ namespace FtpJumperLite.Ui
                 BackColor = _palette.FormBack,
                 ForeColor = _palette.SubText,
                 SizingGrip = false,
-                RenderMode = ToolStripRenderMode.System
+                RenderMode = ToolStripRenderMode.System,
+                Font = _fonts.Create(9F)
             };
             _statusLabel = new ToolStripStatusLabel { Spring = false };
             statusStrip.Items.Add(_statusLabel);
@@ -243,6 +261,10 @@ namespace FtpJumperLite.Ui
 
             _statusLabel.Text = "就绪：单击科目 = 直接打开该科目的 FTP 网址；修改配置后请点「刷新配置」。";
             ReloadSubjects();
+
+            // 启动时也要把 fontScale 套到标题区按钮上：构造时按不带缩放的中性尺寸建的控件，
+            // 只靠 ApplySettings 的话，"+" 和齿轮要等到用户改一次设置才会变大。
+            ApplyFontScale();
 
             // 字段全部就绪：从这里开始才允许按真实 DPI 重新缩放（见 TryApplyDpiScaling）。
             _layoutReady = true;
@@ -263,8 +285,15 @@ namespace FtpJumperLite.Ui
                 _palette = value ?? UiPalette.Light();
                 BackColor = _palette.FormBack;
                 _bottom.BackColor = _palette.FormBack;
-                foreach (var button in new[] { _btnRefresh, _btnOpenConfig, _btnQuit })
+                // 标题区的两个自绘按钮（"+"/齿轮）必须一起更新：它们各自持有 Palette 引用，
+                // 漏掉就会停在构造时的配色（表现为"只有它跟随系统"）。
+                foreach (var button in new[] { _btnRefresh, _btnOpenConfig, _btnQuit, _addSubjectButton, _gear })
                 {
+                    if (button == null)
+                    {
+                        continue;
+                    }
+
                     button.Palette = _palette;
                     button.Invalidate();
                 }
@@ -280,12 +309,6 @@ namespace FtpJumperLite.Ui
                 if (_header != null)
                 {
                     _header.BackColor = _palette.FormBack;
-                }
-
-                if (_gear != null)
-                {
-                    _gear.Palette = _palette;
-                    _gear.Invalidate();
                 }
 
                 Invalidate(true);
@@ -308,7 +331,7 @@ namespace FtpJumperLite.Ui
         /// <summary>编辑一个已有科目：表单预填当前值，保存走整份校验。</summary>
         private void EditSubject(Subject subject)
         {
-            using (var dialog = new SubjectEditorForm(_palette, _dpiScale, subject))
+            using (var dialog = new SubjectEditorForm(_palette, _dpiScale, _fonts, subject))
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK)
                 {
@@ -357,7 +380,7 @@ namespace FtpJumperLite.Ui
         /// <summary>新增科目：字段级表单 → 整份校验 → 写回 subjects.json → 重新加载。</summary>
         private void AddSubject()
         {
-            using (var dialog = new SubjectEditorForm(_palette, _dpiScale))
+            using (var dialog = new SubjectEditorForm(_palette, _dpiScale, _fonts))
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK)
                 {
@@ -380,7 +403,7 @@ namespace FtpJumperLite.Ui
         /// <summary>打开设置窗口（主题 / 字号）：确定后写回 settings.json 并立即生效，不需要重启。</summary>
         private void OpenSettings()
         {
-            using (var dialog = new SettingsForm(_settings, _palette, _dpiScale))
+            using (var dialog = new SettingsForm(_settings, _palette, _dpiScale, _fonts, Path.GetDirectoryName(_configPath)))
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK)
                 {
@@ -443,10 +466,25 @@ namespace FtpJumperLite.Ui
         /// <summary>把当前设置整体套到界面上（配色 + 字号 + 标题栏）。</summary>
         private void ApplySettings()
         {
+            // 字体可能被改过：重新解析（同路径命中缓存，不会重复加载 16MB 字体文件）。
+            var fonts = UiFontSet.Load(_settings, _configPath);
+            if (!string.IsNullOrEmpty(fonts.Note))
+            {
+                AppLogger.Warn("界面字体：" + fonts.Note);
+            }
+
+            _fonts = fonts;
+            Font = _fonts.Create(11F);
+            if (_statusLabel.Owner is StatusStrip strip)
+            {
+                strip.Font = _fonts.Create(9F);
+            }
+
             Palette = ResolvePalette(out _isDark);
             ApplyFontScale();
             ApplyTitleBarTheme();
             AppLogger.Info("设置已生效：theme=" + _settings.Theme + " fontScale=" + _settings.FontScale
+                           + " font=" + _fonts.DisplayName
                            + " → " + (_isDark ? "深色" : "浅色"));
         }
 
@@ -460,18 +498,17 @@ namespace FtpJumperLite.Ui
             var gearSize = new Size(
                 (int)Math.Round(Scale(GearSizeLogical) * Math.Min(1.5F, factor)),
                 (int)Math.Round(Scale(GearSizeLogical) * Math.Min(1.5F, factor)));
-            _gear.Size = gearSize;
-            _gear.MinimumSize = gearSize;
-            _gear.Font = new Font("Segoe UI Symbol", 11F * Math.Min(1.5F, factor));
-            _gear.DpiScale = _dpiScale;
-            _gear.Palette = _palette;
+            ApplyHeaderButtonChrome(_gear, gearSize, factor);
+
+            // "+" 与齿轮是同一对标题区按钮，尺寸/字号/DPI 必须一致，否则调大字号后一大一小。
+            ApplyHeaderButtonChrome(_addSubjectButton, gearSize, factor);
             foreach (var button in new[] { _btnRefresh, _btnOpenConfig, _btnQuit })
             {
                 var size = 12F * factor;
                 if (Math.Abs(button.Font.Size - size) > 0.01F)
                 {
                     var old = button.Font;
-                    button.Font = new Font("Microsoft YaHei UI", size);
+                    button.Font = _fonts.Create(size);
                     if (old != null && !ReferenceEquals(old, Control.DefaultFont))
                     {
                         old.Dispose();
@@ -485,6 +522,52 @@ namespace FtpJumperLite.Ui
 
             // Metrics 里的 FontScale 会驱动科目区重算字号与内容下限。
             _subjectList.Metrics = CreateRowMetrics();
+            UpdateMinimumSize();
+        }
+
+        /// <summary>
+        /// 窗口的最小宽度要随 fontScale 一起增长：底部三个按钮在 150% 字号下各要 300+ 逻辑像素，
+        /// 沿用固定 470 会把最左边那个按钮裁到客户区外面。
+        /// </summary>
+        private void UpdateMinimumSize()
+        {
+            var factor = FontScaleFactor;
+            var buttonWidth = (int)Math.Round(Scale(ButtonMinWidthLogical) * factor);
+            var required = Scale(BottomPadLeftLogical) + Scale(BottomPadRightLogical)
+                           + (3 * (buttonWidth + Scale(RowMarginLogical)))
+                           + Scale(16);
+
+            MinimumSize = new Size(
+                Math.Max(Scale(MinFormWidthLogical), required),
+                Scale(MinFormHeightLogical));
+        }
+
+        /// <summary>标题区自绘按钮（"+" / 齿轮）统一套用尺寸、字号、DPI 与配色。</summary>
+        private void ApplyHeaderButtonChrome(Win11Button? button, Size size, float factor)
+        {
+            if (button == null)
+            {
+                return;
+            }
+
+            button.Size = size;
+            button.MinimumSize = size;
+
+            // 字号同样按 factor 放大，但最多 1.5 倍，避免高 DPI + 大字号时把按钮撑爆。
+            var fontSize = 11F * Math.Min(1.5F, factor);
+            if (Math.Abs(button.Font.Size - fontSize) > 0.01F)
+            {
+                var old = button.Font;
+                button.Font = new Font("Segoe UI Symbol", fontSize);
+                if (old != null && !ReferenceEquals(old, Control.DefaultFont))
+                {
+                    old.Dispose();
+                }
+            }
+
+            button.DpiScale = _dpiScale;
+            button.Palette = _palette;
+            button.Invalidate();
         }
 
         /// <summary>标题栏深浅色（Win10 2004+/Win11）。dwmapi 不可用或系统过老时静默跳过。</summary>
@@ -620,7 +703,9 @@ namespace FtpJumperLite.Ui
                 PadRightLogical = TablePadRightLogical,
                 PadTopLogical = TablePadTopLogical,
                 PadBottomLogical = TablePadBottomLogical,
-                FontScale = FontScaleFactor
+                FontScale = FontScaleFactor,
+                FontFamilyName = _fonts.FamilyName,
+                FontFamily = _fonts.Family
             };
         }
 
@@ -736,6 +821,25 @@ namespace FtpJumperLite.Ui
                            + " 内容高=" + _subjectList.ContentHeightPx
                            + " 可滚动=" + _subjectList.MaxScrollPx
                            + " 滚动偏移=" + _subjectList.ScrollOffsetPx);
+
+            // 启动时配置读不出来：等窗口真正显示后再提示，构造期间不弹模态。
+            var pendingError = _pendingConfigError;
+            _pendingConfigError = null;
+            if (pendingError != null)
+            {
+                ShowConfigError(pendingError);
+            }
+        }
+
+        /// <summary>配置读取失败提示（仅启动后 / 用户主动刷新时调用）。</summary>
+        private void ShowConfigError(string error)
+        {
+            MessageBox.Show(
+                this,
+                error,
+                "配置读取失败",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
         }
 
         /// <summary>把窗口在<b>主屏工作区</b>内居中摆放，并保证整个窗口不越出工作区（含任务栏区域）。</summary>
@@ -819,12 +923,21 @@ namespace FtpJumperLite.Ui
                 Scale(BottomPadBottomLogical));
             foreach (var button in new[] { _btnRefresh, _btnOpenConfig, _btnQuit })
             {
-                button.MinimumSize = new Size(Scale(ButtonMinWidthLogical), Scale(ButtonMinHeightLogical));
+                button.MinimumSize = new Size(
+                    (int)Math.Round(Scale(ButtonMinWidthLogical) * factor),
+                    (int)Math.Round(Scale(ButtonMinHeightLogical) * factor));
                 button.Margin = new Padding(Scale(RowMarginLogical), 0, 0, 0);
                 button.DpiScale = _dpiScale;
             }
 
-            MinimumSize = new Size(Scale(MinFormWidthLogical), Scale(MinFormHeightLogical));
+            UpdateMinimumSize();
+
+            // 标题区两个自绘按钮也按新 DPI 重算一次（原来 DPI 变化后它们会保持旧尺寸）。
+            var headerSize = new Size(
+                (int)Math.Round(Scale(GearSizeLogical) * Math.Min(1.5F, factor)),
+                (int)Math.Round(Scale(GearSizeLogical) * Math.Min(1.5F, factor)));
+            ApplyHeaderButtonChrome(_gear, headerSize, factor);
+            ApplyHeaderButtonChrome(_addSubjectButton, headerSize, factor);
 
             // 科目区自己按 DPI 重算行高/字号/卡片尺寸（先给 Metrics 再给 DpiScale，避免算两遍）。
             _subjectList.Metrics = CreateRowMetrics();
@@ -843,7 +956,7 @@ namespace FtpJumperLite.Ui
                     (int)Math.Round(Scale(ButtonMinWidthLogical) * factor),
                     (int)Math.Round(Scale(ButtonMinHeightLogical) * factor)),
                 Margin = new Padding(Scale(RowMarginLogical), 0, 0, 0),
-                Font = new Font("Microsoft YaHei UI", 12F * factor),
+                Font = _fonts.Create(12F * factor),
                 Palette = _palette,
                 DpiScale = _dpiScale
             };
@@ -859,12 +972,20 @@ namespace FtpJumperLite.Ui
             {
                 _subjects = new List<Subject>();
                 BindSubjects();
-                MessageBox.Show(
-                    this,
-                    error,
-                    "配置读取失败",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
+                _statusLabel.Text = "配置读取失败：" + error;
+                AppLogger.Warn("配置读取失败：" + error);
+
+                if (_layoutReady)
+                {
+                    // 用户主动"刷新配置"：当场告知。
+                    ShowConfigError(error ?? "配置读取失败（没有更多信息）。");
+                }
+                else
+                {
+                    // 构造阶段（启动）：先记下来，OnShown 再弹，避免构造期间阻塞。
+                    _pendingConfigError = error ?? "配置读取失败（没有更多信息）。";
+                }
+
                 return;
             }
 
@@ -958,7 +1079,8 @@ namespace FtpJumperLite.Ui
             int rowHeight,
             int paddingPx = ButtonPadding,
             float minFontSize = MinSubjectNameFontSize,
-            float maxFontSize = MaxSubjectNameFontSize)
+            float maxFontSize = MaxSubjectNameFontSize,
+            FontFamily? fontFamily = null)
         {
             var maxTextHeight = Math.Max(1, rowHeight - paddingPx);
             var maxTextWidth = Math.Max(1, availableWidth);
@@ -967,7 +1089,7 @@ namespace FtpJumperLite.Ui
 
             for (var size = max; size > min; size -= 0.5F)
             {
-                if (MeasureTwoLineHeight(text, size, maxTextWidth) <= maxTextHeight)
+                if (MeasureTwoLineHeight(text, size, maxTextWidth, fontFamily) <= maxTextHeight)
                 {
                     return size;
                 }
@@ -977,13 +1099,22 @@ namespace FtpJumperLite.Ui
         }
 
         /// <summary>量测给定字号下两行文本的高度（只量高度，宽度用于换行判断）。</summary>
-        public static int MeasureTwoLineHeight(string text, float fontSize, int maxWidth)
+        public static int MeasureTwoLineHeight(string text, float fontSize, int maxWidth, FontFamily? fontFamily = null)
         {
-            using (var probe = new Font("Microsoft YaHei UI", fontSize, FontStyle.Bold))
+            // 自定义字体（未安装）必须用 FontFamily 对象建 Font，否则会静默回退到系统字体、量出错误的行高。
+            var font = fontFamily != null
+                ? new Font(
+                    fontFamily,
+                    fontSize,
+                    fontFamily.IsStyleAvailable(FontStyle.Bold) ? FontStyle.Bold : FontStyle.Regular,
+                    GraphicsUnit.Point)
+                : new Font(UiFontSet.DefaultFamilyName, fontSize, FontStyle.Bold);
+
+            using (font)
             {
                 return TextRenderer.MeasureText(
                     text,
-                    probe,
+                    font,
                     new Size(Math.Max(1, maxWidth), 10000),
                     TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height;
             }
@@ -1031,6 +1162,18 @@ namespace FtpJumperLite.Ui
                 return;
             }
 
+            // 双击 / 连点 / 按住回车都会在极短时间内重复触发同一个网址：只放行第一次。
+            var now = (long)Environment.TickCount;
+            if (IsDuplicateLaunch(_lastLaunchUrl, _lastLaunchTicks, url, now))
+            {
+                _statusLabel.Text = "「" + subject.Name + "」刚刚已打开，已忽略重复点击。";
+                AppLogger.Info("忽略重复打开：" + masked);
+                return;
+            }
+
+            _lastLaunchUrl = url;
+            _lastLaunchTicks = now;
+
             if (!FtpUrlLauncher.TryOpen(url, masked, out var error))
             {
                 _statusLabel.Text = "「" + subject.Name + "」打开失败。";
@@ -1040,6 +1183,23 @@ namespace FtpJumperLite.Ui
 
             _configStore.UpdateLastOpenUtc(subject.Id, DateTime.Now);
             _statusLabel.Text = "已打开「" + subject.Name + "」：" + masked;
+        }
+
+        /// <summary>
+        /// 纯函数：这一次打开是否属于"窗口期内重复触发同一个网址"。
+        /// 抽出来是为了能在不真的启动资源管理器的前提下做回归测试。
+        /// 时间戳用 <see cref="Environment.TickCount"/>（net48 没有 TickCount64），
+        /// 差值按无符号计算，49 天回绕也不会误判。
+        /// </summary>
+        internal static bool IsDuplicateLaunch(string? lastUrl, long lastTicks, string url, long nowTicks)
+        {
+            if (string.IsNullOrEmpty(lastUrl) || !string.Equals(lastUrl, url, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var elapsed = unchecked((uint)(nowTicks - lastTicks));
+            return elapsed < DuplicateLaunchWindowMs;
         }
 
         // ---------- 其它 ----------

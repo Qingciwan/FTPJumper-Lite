@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -45,6 +45,13 @@ namespace FtpJumperLite.Ui
         public float FontScale = 1F;
 
         public string FontFamilyName = "Microsoft YaHei UI";
+
+        /// <summary>
+        /// 实际使用的字体家族。非空时优先于 <see cref="FontFamilyName"/>：
+        /// 未安装的字体（PrivateFontCollection）只能通过 FontFamily 对象创建 Font，
+        /// 用家族名 new Font 会静默回退到系统默认字体。
+        /// </summary>
+        public FontFamily? FontFamily;
     }
 
     /// <summary>
@@ -67,6 +74,12 @@ namespace FtpJumperLite.Ui
         private IReadOnlyList<Subject> _subjects = new List<Subject>();
         private RowMetrics _metrics = new RowMetrics();
         private UiPalette _palette = UiPalette.Light();
+
+        /// <summary>
+        /// 双击的第二下（MouseDown 的 Clicks &gt; 1）不再激活：单击已经是"直接打开"，
+        /// 如果每一下 MouseUp 都激活，老师习惯性双击就会开出两个资源管理器窗口。
+        /// </summary>
+        private bool _suppressNextActivation;
         private readonly ToolTip _toolTip = new ToolTip();
         private Font? _titleFont;
         private Font? _subtitleFont;
@@ -314,7 +327,8 @@ namespace FtpJumperLite.Ui
                 textBudget,
                 0,
                 MainForm.MinSubjectNameFontSize * _metrics.FontScale,
-                MainForm.MaxSubjectNameFontSize * _metrics.FontScale);
+                MainForm.MaxSubjectNameFontSize * _metrics.FontScale,
+                _metrics.FontFamily);
             UpdateFonts(titleSize);
 
             UpdateScrollGeometry(availHeight);
@@ -330,10 +344,7 @@ namespace FtpJumperLite.Ui
             }
 
             var textWidth = Math.Max(1, availWidth - (2 * _cardPadX));
-            using (var probe = new Font(
-                _metrics.FontFamilyName,
-                MainForm.MinSubjectNameFontSize * _metrics.FontScale,
-                FontStyle.Bold))
+            using (var probe = NewFont(MainForm.MinSubjectNameFontSize * _metrics.FontScale, FontStyle.Bold))
             {
                 var worst = 0;
                 foreach (var subject in _subjects)
@@ -343,11 +354,24 @@ namespace FtpJumperLite.Ui
                                + MainForm.Ellipsize(subject.DisplayLine, probe, textWidth);
                     worst = Math.Max(
                         worst,
-                        MainForm.MeasureTwoLineHeight(text, MainForm.MinSubjectNameFontSize * _metrics.FontScale, textWidth));
+                        MainForm.MeasureTwoLineHeight(text, MainForm.MinSubjectNameFontSize * _metrics.FontScale, textWidth, _metrics.FontFamily));
                 }
 
                 return worst + (2 * _cardPadY) + Scale(_metrics.TextSafetyLogical) + _gap;
             }
+        }
+
+        /// <summary>按当前字体家族建 Font：私有字体给 FontFamily 对象，系统字体退回家族名。</summary>
+        private Font NewFont(float size, FontStyle style)
+        {
+            var family = _metrics.FontFamily;
+            if (family != null)
+            {
+                var useStyle = family.IsStyleAvailable(style) ? style : FontStyle.Regular;
+                return new Font(family, Math.Max(1F, size), useStyle, GraphicsUnit.Point);
+            }
+
+            return new Font(_metrics.FontFamilyName, Math.Max(1F, size), style, GraphicsUnit.Point);
         }
 
         public void ScrollToTop()
@@ -681,7 +705,7 @@ namespace FtpJumperLite.Ui
                 if (_hintFont == null || Math.Abs(_hintFont.Size - hintSize) > 0.01F)
                 {
                     DisposeFont(ref _hintFont);
-                    _hintFont = new Font(_metrics.FontFamilyName, hintSize);
+                    _hintFont = NewFont(hintSize, FontStyle.Regular);
                 }
 
                 return;
@@ -690,20 +714,20 @@ namespace FtpJumperLite.Ui
             if (_hintFont == null || Math.Abs(_hintFont.Size - hintSize) > 0.01F)
             {
                 DisposeFont(ref _hintFont);
-                _hintFont = new Font(_metrics.FontFamilyName, hintSize);
+                _hintFont = NewFont(hintSize, FontStyle.Regular);
             }
 
             var subtitleSize = Math.Max(9F, (float)Math.Round(titleSize * 0.8F, 1));
             if (_titleFont == null || Math.Abs(_titleFont.Size - titleSize) > 0.01F)
             {
                 DisposeFont(ref _titleFont);
-                _titleFont = new Font(_metrics.FontFamilyName, titleSize, FontStyle.Bold);
+                _titleFont = NewFont(titleSize, FontStyle.Bold);
             }
 
             if (_subtitleFont == null || Math.Abs(_subtitleFont.Size - subtitleSize) > 0.01F)
             {
                 DisposeFont(ref _subtitleFont);
-                _subtitleFont = new Font(_metrics.FontFamilyName, subtitleSize, FontStyle.Regular);
+                _subtitleFont = NewFont(subtitleSize, FontStyle.Regular);
             }
         }
 
@@ -769,6 +793,7 @@ namespace FtpJumperLite.Ui
         protected override void OnMouseLeave(EventArgs e)
         {
             base.OnMouseLeave(e);
+            _suppressNextActivation = false;
             if (_hoverIndex != -1 || _pressedIndex != -1)
             {
                 _hoverIndex = -1;
@@ -810,6 +835,15 @@ namespace FtpJumperLite.Ui
                 return;
             }
 
+            // 双击/三击的第二下起：只当作"同一次点击"，不再走激活（否则会开出第二个窗口）。
+            if (e.Clicks > 1)
+            {
+                _suppressNextActivation = true;
+                _pressedIndex = -1;
+                Invalidate();
+                return;
+            }
+
             Focus();
 
             // 滚动条优先：点滑块开始拖动，点空白跳到该位置。
@@ -839,6 +873,16 @@ namespace FtpJumperLite.Ui
         protected override void OnMouseUp(MouseEventArgs e)
         {
             base.OnMouseUp(e);
+
+            if (_suppressNextActivation)
+            {
+                // 双击的第二下抬手：这次点击已经在第一下时打开过了。
+                _suppressNextActivation = false;
+                _pressedIndex = -1;
+                Invalidate();
+                return;
+            }
+
             if (_draggingThumb)
             {
                 _draggingThumb = false;

@@ -1,4 +1,4 @@
-﻿<#
+<#
 Build Release and assemble a clean deploy folder for the classroom PC (lite edition).
 
 Usage:

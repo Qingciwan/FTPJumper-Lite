@@ -20,6 +20,21 @@ namespace FtpJumperLite.Models
         [JsonProperty("fontScale")]
         public int FontScale { get; set; } = 100;
 
+        /// <summary>
+        /// 界面字体家族名（可留空 = 微软雅黑 UI）。只有在系统里已安装的字体才能只写名字；
+        /// 未安装的字体请配合 <see cref="FontFile"/> 一起用。
+        /// </summary>
+        [JsonProperty("fontFamily")]
+        public string? FontFamily { get; set; }
+
+        /// <summary>
+        /// 自定义字体文件（相对 settings.json 所在目录或 exe 目录，也可写绝对路径）。
+        /// 例如把 Blueaka.ttf 放在 exe 旁边，写 "fontFile": "Blueaka.ttf"。
+        /// 文件存在且能加载时优先于 fontFamily。
+        /// </summary>
+        [JsonProperty("fontFile")]
+        public string? FontFile { get; set; }
+
         /// <summary>调色板覆盖（可全部留空）。</summary>
         [JsonProperty("palette")]
         public PaletteOverrides? Palette { get; set; }
@@ -58,7 +73,21 @@ namespace FtpJumperLite.Models
                 Version = 1;
             }
 
+            FontFamily = TrimOrNull(FontFamily);
+            FontFile = TrimOrNull(FontFile);
+
             return notes;
+        }
+
+        private static string? TrimOrNull(string? value)
+        {
+            if (value == null)
+            {
+                return null;
+            }
+
+            var trimmed = value.Trim();
+            return trimmed.Length == 0 ? null : trimmed;
         }
     }
 

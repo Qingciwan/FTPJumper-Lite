@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.Windows.Forms;
 using FtpJumperLite.Models;
@@ -35,7 +35,7 @@ namespace FtpJumperLite.Ui
         private readonly ComboBox _color;
         private readonly ComboBox _texture;
 
-        public SubjectEditorForm(UiPalette palette, float dpiScale, Subject? existing = null)
+        public SubjectEditorForm(UiPalette palette, float dpiScale, UiFontSet? fonts, Subject? existing = null)
         {
             _palette = palette;
             _dpiScale = dpiScale <= 0F ? 1F : dpiScale;
@@ -50,7 +50,7 @@ namespace FtpJumperLite.Ui
             Text = existing == null ? "新增科目" : "编辑科目";
             BackColor = palette.FormBack;
             ForeColor = palette.TitleText;
-            Font = new Font("Microsoft YaHei UI", 10F);
+            Font = (fonts ?? UiFontSet.Default).Create(10F);
 
             // 先给一个临时尺寸，用来量出标题栏/边框占多少，再按内容算最终高度。
             ClientSize = new Size(S(DialogWidth), S(400));

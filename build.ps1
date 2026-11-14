@@ -1,4 +1,4 @@
-﻿<#
+<#
 One-click: restore + build + test + selfcheck for the lite edition. Usage:
   powershell -ExecutionPolicy Bypass -File .\build.ps1 [-Configuration Debug|Release] [-SkipTests]
 NOTE: keep this file ASCII-only to avoid PowerShell codepage issues.
