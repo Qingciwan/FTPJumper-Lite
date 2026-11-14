@@ -282,6 +282,31 @@ namespace FtpJumperLite.Tests
             Assert.Contains("找不到", missingError);
         }
 
+        [Fact]
+        public void FontPicker_ListsOnlyFontFiles()
+        {
+            // 内置选择器：只列字体扩展名、按名字排序、遇到无权限目录返回空表而不是抛异常。
+            var dir = Path.Combine(_dir, "fonts");
+            Directory.CreateDirectory(dir);
+            File.WriteAllBytes(Path.Combine(dir, "b.ttf"), new byte[300]);
+            File.WriteAllBytes(Path.Combine(dir, "a.OTF"), new byte[300]);
+            File.WriteAllBytes(Path.Combine(dir, "c.ttc"), new byte[300]);
+            File.WriteAllText(Path.Combine(dir, "readme.txt"), "not a font");
+            Directory.CreateDirectory(Path.Combine(dir, "subdir"));
+
+            var fonts = FontPickerForm.ListFontFiles(dir);
+
+            Assert.Equal(3, fonts.Count);
+            Assert.Equal("a.OTF", Path.GetFileName(fonts[0]));
+            Assert.Equal("b.ttf", Path.GetFileName(fonts[1]));
+            Assert.Equal("c.ttc", Path.GetFileName(fonts[2]));
+
+            Assert.True(FontPickerForm.IsFontFile("x.TTF"));
+            Assert.False(FontPickerForm.IsFontFile("x.txt"));
+
+            Assert.Empty(FontPickerForm.ListFontFiles(Path.Combine(_dir, "不存在的目录")));
+        }
+
         private string CopySystemFont(string fileName)
         {
             var source = FindSystemFontFile();

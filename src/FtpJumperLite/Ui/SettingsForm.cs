@@ -1,6 +1,5 @@
 using System;
 using System.Drawing;
-using System.IO;
 using System.Windows.Forms;
 using FtpJumperLite.Models;
 using FtpJumperLite.Services;
@@ -20,6 +19,7 @@ namespace FtpJumperLite.Ui
         private readonly RadioButton _custom;
         private readonly NumericUpDown _fontScale;
         private readonly UiSettings _original;
+        private readonly UiPalette _palette;
         private readonly float _dpiScale;
         private readonly string? _baseDirectory;
         private readonly Label _fontLabel;
@@ -29,6 +29,7 @@ namespace FtpJumperLite.Ui
         public SettingsForm(UiSettings? current, UiPalette palette, float dpiScale, UiFontSet fonts, string? configDirectory)
         {
             _original = current ?? UiSettings.CreateDefault();
+            _palette = palette;
             _dpiScale = dpiScale <= 0F ? 1F : dpiScale;
             _baseDirectory = configDirectory;
             _pendingFontFile = _original.FontFile;
@@ -45,12 +46,6 @@ namespace FtpJumperLite.Ui
             ForeColor = palette.TitleText;
             Font = fonts.Create(10F);
             ClientSize = new Size(S(360), S(320));
-
-            // 把字体文件直接拖进窗口也能换字体：某些机器上"文件对话框 + 外壳扩展"不稳，
-            // 这条不经过对话框的入口可以照常使用。
-            AllowDrop = true;
-            DragEnter += OnFontFileDragEnter;
-            DragDrop += OnFontFileDragDrop;
 
             var y = S(16);
             Controls.Add(MakeLabel("主题", y));
@@ -204,29 +199,21 @@ namespace FtpJumperLite.Ui
 
         private void ChooseFontFile()
         {
-            // 先记一行：万一某个机器上"打开文件对话框"这一步就把进程搞崩（外壳扩展是原生代码，
-            // 托管层拦不住），日志里也能确定它死在对话框上，而不是我们的加载代码里。
-            AppLogger.Info("界面字体：打开文件选择对话框…");
+            // 不用系统文件对话框：装了 Nahimic / Alienware Sound Center 的机器上，
+            // 那个对话框会让注入的 NahimicOSD.dll 把进程直接搞崩（实测 0xC0000005、无日志）。
+            // 内置选择器只走纯文件 API，不碰外壳扩展与 OLE。
+            AppLogger.Info("界面字体：打开内置字体选择器…");
 
-            string fileName;
-            using (var dialog = new OpenFileDialog
-                   {
-                       Title = "选择界面字体文件",
-                       Filter = "字体文件 (*.ttf;*.otf;*.ttc)|*.ttf;*.otf;*.ttc|所有文件 (*.*)|*.*",
-                       CheckFileExists = true,
-                       RestoreDirectory = true
-                   })
+            using (var picker = new FontPickerForm(_palette, _dpiScale, _baseDirectory))
             {
-                if (dialog.ShowDialog(this) != DialogResult.OK)
+                if (picker.ShowDialog(this) != DialogResult.OK || string.IsNullOrEmpty(picker.SelectedPath))
                 {
                     AppLogger.Info("界面字体：取消选择");
                     return;
                 }
 
-                fileName = dialog.FileName;
+                TryApplyFontFile(picker.SelectedPath!);
             }
-
-            TryApplyFontFile(fileName);
         }
 
         /// <summary>
@@ -297,43 +284,6 @@ namespace FtpJumperLite.Ui
             _pendingFontFile = storable;
             _pendingFontFamily = loaded.FamilyName;
             _fontLabel.Text = loaded.DisplayName + "  ← " + storable;
-        }
-
-        private void OnFontFileDragEnter(object? sender, DragEventArgs e)
-        {
-            e.Effect = DragDropEffects.None;
-            if (e.Data != null && e.Data.GetDataPresent(DataFormats.FileDrop))
-            {
-                var files = e.Data.GetData(DataFormats.FileDrop) as string[];
-                if (files != null && files.Length == 1 && IsFontFileName(files[0]))
-                {
-                    e.Effect = DragDropEffects.Copy;
-                }
-            }
-        }
-
-        private void OnFontFileDragDrop(object? sender, DragEventArgs e)
-        {
-            if (e.Data == null || !e.Data.GetDataPresent(DataFormats.FileDrop))
-            {
-                return;
-            }
-
-            var files = e.Data.GetData(DataFormats.FileDrop) as string[];
-            if (files == null || files.Length != 1 || !IsFontFileName(files[0]))
-            {
-                return;
-            }
-
-            TryApplyFontFile(files[0]);
-        }
-
-        private static bool IsFontFileName(string path)
-        {
-            var extension = Path.GetExtension(path) ?? string.Empty;
-            return extension.Equals(".ttf", StringComparison.OrdinalIgnoreCase)
-                   || extension.Equals(".otf", StringComparison.OrdinalIgnoreCase)
-                   || extension.Equals(".ttc", StringComparison.OrdinalIgnoreCase);
         }
 
         private void ResetFontToDefault()
