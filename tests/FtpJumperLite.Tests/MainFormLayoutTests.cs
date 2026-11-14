@@ -708,8 +708,8 @@ namespace FtpJumperLite.Tests
 
             var info = System.Diagnostics.FileVersionInfo.GetVersionInfo(exe);
 
-            Assert.Equal("0.1.1.4", info.FileVersion);
-            Assert.Equal("0.1.1.4", info.ProductVersion);
+            Assert.Equal("0.1.1.5", info.FileVersion);
+            Assert.Equal("0.1.1.5", info.ProductVersion);
             Assert.Contains("RE-FTPJumper Lite", info.ProductName);
             Assert.Contains("RE-FTPJumper Lite", info.FileDescription);
         }

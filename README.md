@@ -1,6 +1,6 @@
 # RE-FTPJumper Lite 课堂资料助手（liteEdition）
 
-> 当前发行版：**RE-FTPJumper Lite 0.1.1.4**，可执行文件 `RE-FTPJumperLite.exe`。
+> 当前发行版：**RE-FTPJumper Lite 0.1.1.5**，可执行文件 `RE-FTPJumperLite.exe`。
 
 **lite 版**：把每个科目的 FTP 资料**直接交给 Windows 文件资源管理器打开**（写死 explorer.exe，不走系统 ftp 关联），
 不下载、不缓存、不做增量比对。免安装单 exe，运行环境 Windows 11（24H2 验证目标）+ .NET Framework 4.8（系统自带）。
