@@ -505,7 +505,7 @@ namespace FtpJumperLite.Ui
             foreach (var button in new[] { _btnRefresh, _btnOpenConfig, _btnQuit })
             {
                 var size = 12F * factor;
-                if (Math.Abs(button.Font.Size - size) > 0.01F)
+                if (NeedsFontRefresh(button.Font, size))
                 {
                     var old = button.Font;
                     button.Font = _fonts.Create(size);
@@ -523,6 +523,20 @@ namespace FtpJumperLite.Ui
             // Metrics 里的 FontScale 会驱动科目区重算字号与内容下限。
             _subjectList.Metrics = CreateRowMetrics();
             UpdateMinimumSize();
+        }
+
+        /// <summary>
+        /// 字体要不要重建：字号变了，**或者字体家族变了**。
+        /// 换自定义字体时字号常常不变（12pt 还是 12pt），只比字号会让底部按钮继续用旧字体。
+        /// </summary>
+        private bool NeedsFontRefresh(Font current, float size)
+        {
+            if (Math.Abs(current.Size - size) > 0.01F)
+            {
+                return true;
+            }
+
+            return !string.Equals(current.FontFamily.Name, _fonts.FamilyName, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>

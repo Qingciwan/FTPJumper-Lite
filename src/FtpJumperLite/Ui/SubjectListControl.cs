@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -702,7 +702,7 @@ namespace FtpJumperLite.Ui
             {
                 DisposeFont(ref _titleFont);
                 DisposeFont(ref _subtitleFont);
-                if (_hintFont == null || Math.Abs(_hintFont.Size - hintSize) > 0.01F)
+                if (NeedsFontRefresh(_hintFont, hintSize))
                 {
                     DisposeFont(ref _hintFont);
                     _hintFont = NewFont(hintSize, FontStyle.Regular);
@@ -711,24 +711,40 @@ namespace FtpJumperLite.Ui
                 return;
             }
 
-            if (_hintFont == null || Math.Abs(_hintFont.Size - hintSize) > 0.01F)
+            if (NeedsFontRefresh(_hintFont, hintSize))
             {
                 DisposeFont(ref _hintFont);
                 _hintFont = NewFont(hintSize, FontStyle.Regular);
             }
 
             var subtitleSize = Math.Max(9F, (float)Math.Round(titleSize * 0.8F, 1));
-            if (_titleFont == null || Math.Abs(_titleFont.Size - titleSize) > 0.01F)
+            if (NeedsFontRefresh(_titleFont, titleSize))
             {
                 DisposeFont(ref _titleFont);
                 _titleFont = NewFont(titleSize, FontStyle.Bold);
             }
 
-            if (_subtitleFont == null || Math.Abs(_subtitleFont.Size - subtitleSize) > 0.01F)
+            if (NeedsFontRefresh(_subtitleFont, subtitleSize))
             {
                 DisposeFont(ref _subtitleFont);
                 _subtitleFont = NewFont(subtitleSize, FontStyle.Regular);
             }
+        }
+
+        /// <summary>
+        /// 字体要不要重建：字号变了，**或者字体家族变了**。
+        /// 只比字号是不够的 —— 换自定义字体时字号常常不变（比如 12pt 还是 12pt），
+        /// 那样科目区就会一直用旧字体，看起来"字体只对别的窗口生效"。
+        /// </summary>
+        private bool NeedsFontRefresh(Font? font, float size)
+        {
+            if (font == null || Math.Abs(font.Size - size) > 0.01F)
+            {
+                return true;
+            }
+
+            var expected = _metrics.FontFamily?.Name ?? _metrics.FontFamilyName;
+            return !string.Equals(font.FontFamily.Name, expected, StringComparison.OrdinalIgnoreCase);
         }
 
         private static void DisposeFont(ref Font? font)

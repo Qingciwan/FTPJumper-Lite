@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Drawing;
 using System.Windows.Forms;
 using FtpJumperLite.Models;
@@ -63,19 +63,24 @@ namespace FtpJumperLite.Ui
                 Location = Point.Empty
             };
 
+            // 行距不写死：每一行都按"标签/控件的实际高度"往下排。
+            // 换了大行高的自定义字体后，固定行距会把下一行压上来（现场就是标签被裁、输入框盖住标签）。
             var y = S(12);
-            _id = AddField(content, "标识（英文/数字，用于日志与本地目录名）", y, existing?.Id ?? "s" + DateTime.Now.ToString("yyyyMMddHHmmss"));
-            y += S(RowHeight);
-            _name = AddField(content, "科目名称（显示在卡片上）", y, existing?.Name ?? "");
-            y += S(RowHeight);
-            _host = AddField(content, "FTP 主机", y, existing?.Host ?? "ftp.example.com");
-            y += S(RowHeight);
+            _id = AddField(content, "标识（英文/数字，用于日志与本地目录名）", ref y, existing?.Id ?? "s" + DateTime.Now.ToString("yyyyMMddHHmmss"));
+            _name = AddField(content, "科目名称（显示在卡片上）", ref y, existing?.Name ?? "");
+            _host = AddField(content, "FTP 主机", ref y, existing?.Host ?? "ftp.example.com");
 
-            content.Controls.Add(MakeLabel("端口", y));
+            // 同一行的两个字段：标签各给左边距，控件放在"两个标签里最矮的那个"下面。
+            var portLabel = MakeLabel("端口", y);
+            var credentialLabel = MakeLabel("凭据方式", y, S(132));
+            content.Controls.Add(portLabel);
+            content.Controls.Add(credentialLabel);
+
+            var pairTop = Math.Max(portLabel.Bottom, credentialLabel.Bottom) + S(4);
             _port = new NumericUpDown
             {
                 Left = S(18),
-                Top = y + S(20),
+                Top = pairTop,
                 Width = S(90),
                 Minimum = 1,
                 Maximum = 65535,
@@ -84,14 +89,10 @@ namespace FtpJumperLite.Ui
                 ForeColor = _palette.TitleText,
                 BorderStyle = BorderStyle.FixedSingle
             };
-            content.Controls.Add(_port);
-
-            // 同一行右侧：标签必须显式给左边距，否则会压到"端口"上。
-            content.Controls.Add(MakeLabel("凭据方式", y, S(132)));
             _credentialMode = new ComboBox
             {
                 Left = S(132),
-                Top = y + S(20),
+                Top = pairTop,
                 Width = S(200),
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 BackColor = _palette.CardBack,
@@ -101,21 +102,24 @@ namespace FtpJumperLite.Ui
             _credentialMode.SelectedItem = string.Equals(existing?.CredentialMode, "prompt", StringComparison.OrdinalIgnoreCase)
                 ? "prompt"
                 : "inline";
+            content.Controls.Add(_port);
             content.Controls.Add(_credentialMode);
-            y += S(RowHeight);
+            y = Math.Max(_port.Bottom, _credentialMode.Bottom) + S(12);
 
-            _user = AddField(content, "账号", y, existing?.User ?? "");
-            y += S(RowHeight);
-            _password = AddField(content, "密码（明文保存在 subjects.json，与现状一致）", y, existing?.Password ?? "");
-            y += S(RowHeight);
-            _remotePath = AddField(content, "远端路径（留空 = 站点根目录）", y, existing?.RemotePath ?? "/");
-            y += S(RowHeight);
+            _user = AddField(content, "账号", ref y, existing?.User ?? "");
+            _password = AddField(content, "密码（明文保存在 subjects.json，与现状一致）", ref y, existing?.Password ?? "");
+            _remotePath = AddField(content, "远端路径（留空 = 站点根目录）", ref y, existing?.RemotePath ?? "/");
 
-            content.Controls.Add(MakeLabel("强调色（左侧色条 + 极淡同色底；留空 = 跟随主题）", y));
+            var colorLabel = MakeLabel("强调色（左侧色条 + 极淡同色底；留空 = 跟随主题）", y);
+            var textureLabel = MakeLabel("底纹", y, S(236));
+            content.Controls.Add(colorLabel);
+            content.Controls.Add(textureLabel);
+
+            var styleTop = Math.Max(colorLabel.Bottom, textureLabel.Bottom) + S(4);
             _color = new ComboBox
             {
                 Left = S(18),
-                Top = y + S(20),
+                Top = styleTop,
                 Width = S(200),
                 DropDownStyle = ComboBoxStyle.DropDown,
                 BackColor = _palette.CardBack,
@@ -123,13 +127,10 @@ namespace FtpJumperLite.Ui
             };
             _color.Items.AddRange(new object[] { "", "红", "橙", "黄", "绿", "青", "蓝", "紫", "粉", "棕", "灰" });
             _color.Text = existing?.ColorHex ?? "";
-            content.Controls.Add(_color);
-
-            content.Controls.Add(MakeLabel("底纹", y, S(236)));
             _texture = new ComboBox
             {
                 Left = S(236),
-                Top = y + S(20),
+                Top = styleTop,
                 Width = S(176),
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 BackColor = _palette.CardBack,
@@ -137,8 +138,9 @@ namespace FtpJumperLite.Ui
             };
             _texture.Items.AddRange(new object[] { "无", "stripe（斜纹）", "dots（点阵）", "grid（网格）", "gradient（渐变）" });
             _texture.SelectedIndex = TextureToIndex(existing?.Texture);
+            content.Controls.Add(_color);
             content.Controls.Add(_texture);
-            y += S(56);
+            y = Math.Max(_color.Bottom, _texture.Bottom) + S(12);
 
             var note = new Label
             {
@@ -301,13 +303,16 @@ namespace FtpJumperLite.Ui
             }
         }
 
-        private TextBox AddField(Control parent, string label, int top, string initial)
+        private TextBox AddField(Control parent, string label, ref int y, string initial)
         {
-            parent.Controls.Add(MakeLabel(label, top));
+            var labelControl = MakeLabel(label, y);
+            parent.Controls.Add(labelControl);
+            y = labelControl.Bottom + S(4);
+
             var box = new TextBox
             {
                 Left = S(18),
-                Top = top + S(20),
+                Top = y,
                 Width = S(FieldWidth),
                 Text = initial,
                 BackColor = _palette.CardBack,
@@ -315,6 +320,7 @@ namespace FtpJumperLite.Ui
                 BorderStyle = BorderStyle.FixedSingle
             };
             parent.Controls.Add(box);
+            y = box.Bottom + S(12);
             return box;
         }
 

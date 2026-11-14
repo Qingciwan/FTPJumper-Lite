@@ -307,6 +307,86 @@ namespace FtpJumperLite.Tests
             Assert.Empty(FontPickerForm.ListFontFiles(Path.Combine(_dir, "不存在的目录")));
         }
 
+        [Fact]
+        public void SubjectList_RecreatesFontsWhenFamilyChanges()
+        {
+            // "字体只对设置/新增窗口生效、科目区没变"的根因：重建判断只看字号。
+            var subjects = new List<Subject>
+            {
+                new Subject
+                {
+                    Id = "s1", Name = "语文", Host = "ftp.example.com", Port = 21,
+                    User = "u", Password = "p", RemotePath = "/", CredentialMode = "inline", LastSyncAt = ""
+                }
+            };
+
+            using (var list = new SubjectListControl { DpiScale = 1F, Subjects = subjects })
+            {
+                list.ClientSize = new Size(600, 400);
+                list.RelayoutNow();
+                var before = TitleFontFamilyName(list);
+
+                // 家族换了、字号没变：必须重建
+                list.Metrics = new RowMetrics { FontFamilyName = "Arial", FontFamily = new FontFamily("Arial") };
+                list.RelayoutNow();
+
+                var after = TitleFontFamilyName(list);
+                Assert.NotEqual(before, after);
+                Assert.Equal("Arial", after);
+            }
+        }
+
+        [Fact]
+        public void SubjectEditorForm_RowsAreSpacedByActualLabelHeight()
+        {
+            Exception? failure = null;
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    using (var form = new SubjectEditorForm(UiPalette.Light(), 1.75F, UiFontSet.Default, null))
+                    {
+                        form.PerformLayout();
+                        Panel? content = null;
+                        foreach (Control child in form.Controls)
+                        {
+                            if (child is Panel panel)
+                            {
+                                content = panel;
+                                break;
+                            }
+                        }
+
+                        Assert.NotNull(content);
+
+                        // 创建顺序是 标签、输入框、标签、输入框…：第一个输入框必须排在第一个标签"下面"，
+                        // 并留出间隙。旧实现是固定偏移（标签高 20 时间隙正好 0），换大行高字体就会压住标签。
+                        var label = Assert.IsType<Label>(content!.Controls[0]);
+                        var box = content.Controls[1];
+                        Assert.True(
+                            box.Top >= label.Bottom + 4,
+                            "「" + label.Text + "」与下面的输入框只有 " + (box.Top - label.Bottom) + "px 间隙");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            thread.Join();
+
+            Assert.True(failure == null, "新增科目窗口的行距没有按字体高度算：" + failure);
+        }
+
+        private static string? TitleFontFamilyName(SubjectListControl list)
+        {
+            var field = typeof(SubjectListControl).GetField("_titleFont", BindingFlags.NonPublic | BindingFlags.Instance);
+            var font = field?.GetValue(list) as Font;
+            return font?.FontFamily.Name;
+        }
+
         private string CopySystemFont(string fileName)
         {
             var source = FindSystemFontFile();
