@@ -387,6 +387,89 @@ namespace FtpJumperLite.Tests
             return font?.FontFamily.Name;
         }
 
+        [Fact]
+        public void FontPicker_OkEnablesOnlyForFontSelection()
+        {
+            var dir = Path.Combine(_dir, "picker");
+            Directory.CreateDirectory(dir);
+            File.WriteAllBytes(Path.Combine(dir, "only.ttf"), new byte[300]);
+            Directory.CreateDirectory(Path.Combine(dir, "subdir"));
+
+            Exception? failure = null;
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    using (var form = new FontPickerForm(UiPalette.Light(), 1F, dir))
+                    {
+                        ListBox? list = null;
+                        Win11Button? ok = null;
+                        foreach (Control child in form.Controls)
+                        {
+                            if (child is ListBox box)
+                            {
+                                list = box;
+                            }
+
+                            if (child is Win11Button button && button.Text == "确定")
+                            {
+                                ok = button;
+                            }
+                        }
+
+                        Assert.NotNull(list);
+                        Assert.NotNull(ok);
+
+                        // 刚打开、什么都没选：不可用（这里曾经一直是 false，确定按钮永远是灰的）
+                        Assert.False(ok!.Enabled);
+
+                        var fontIndex = FindItem(list!, "only.ttf");
+                        Assert.True(fontIndex >= 0, "应当列出 only.ttf");
+                        list!.SelectedIndex = fontIndex;
+                        Assert.True(ok.Enabled, "选中字体文件后「确定」必须可用");
+
+                        var dirIndex = -1;
+                        for (var i = 0; i < list.Items.Count; i++)
+                        {
+                            if (i != fontIndex)
+                            {
+                                dirIndex = i;
+                                break;
+                            }
+                        }
+
+                        if (dirIndex >= 0)
+                        {
+                            list.SelectedIndex = dirIndex;
+                            Assert.False(ok.Enabled, "选中目录时「确定」应当不可用");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            thread.Join();
+
+            Assert.True(failure == null, "字体选择器的按钮状态不正确：" + failure);
+        }
+
+        private static int FindItem(ListBox list, string text)
+        {
+            for (var i = 0; i < list.Items.Count; i++)
+            {
+                if (string.Equals(list.Items[i]?.ToString(), text, StringComparison.Ordinal))
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
         private string CopySystemFont(string fileName)
         {
             var source = FindSystemFontFile();

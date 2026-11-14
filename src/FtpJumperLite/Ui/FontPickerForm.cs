@@ -39,8 +39,8 @@ namespace FtpJumperLite.Ui
             BackColor = palette.FormBack;
             ForeColor = palette.TitleText;
             Font = new Font("Microsoft YaHei UI", 10F);
-            ClientSize = new Size(S(520), S(420));
-            MinimumSize = new Size(S(420), S(300));
+            ClientSize = new Size(S(560), S(440));
+            MinimumSize = new Size(S(470), S(300));
 
             _path = new Label
             {
@@ -67,6 +67,18 @@ namespace FtpJumperLite.Ui
                 BorderStyle = BorderStyle.FixedSingle
             };
             _list.DoubleClick += (_, _) => ActivateSelection();
+            // 选中字体文件才允许点「确定」：之前这里漏了，导致确定按钮一直是灰的。
+            _list.SelectedIndexChanged += (_, _) => UpdateOkState();
+            // 回车 = 双击（选中目录就进去、选中字体就确定）。
+            _list.KeyDown += (_, e) =>
+            {
+                if (e.KeyCode == Keys.Enter)
+                {
+                    ActivateSelection();
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                }
+            };
             Controls.Add(_list);
 
             var up = MakeButton("上一级", S(12), S(344), S(90));
@@ -218,7 +230,13 @@ namespace FtpJumperLite.Ui
                 _list.Items.Add(new Entry("（这个目录里没有字体文件）", null, false));
             }
 
-            _ok.Enabled = false;
+            UpdateOkState();
+        }
+
+        /// <summary>只有选中"字体文件"时「确定」才可用；选中目录/占位项时不可用。</summary>
+        private void UpdateOkState()
+        {
+            _ok.Enabled = _list.SelectedItem is Entry entry && entry.IsFont;
         }
 
         private void ActivateSelection()
